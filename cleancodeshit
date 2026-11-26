@@ -334,20 +334,21 @@ path_bytes() {
 }
 
 same_file_system() {
-  local path="$1" parent="$2" dev device devices mount_point
+  local path="$1" parent="$2" dev device devices mount_point stat_flag
   if [ "$OS" = Linux ] && [ -r /proc/self/mountinfo ]; then
     while read -r _ _ _ _ mount_point _; do
       printf -v mount_point '%b' "$mount_point"
       case "$mount_point" in "$path"|"$path"/*) return 1 ;; esac
     done </proc/self/mountinfo
   fi
-  if [ "$OS" = Darwin ]; then
-    dev=$(stat -f '%d' "$parent") || return 1
-    devices=$(find "$path" -xdev -type d -exec stat -f '%d' {} +) || return 1
+  # Detect the installed stat syntax independently of the cache layout.
+  if dev=$(stat -c '%d' "$parent" 2>/dev/null); then
+    stat_flag=-c
   else
-    dev=$(stat -c '%d' "$parent") || return 1
-    devices=$(find "$path" -xdev -type d -exec stat -c '%d' {} +) || return 1
+    dev=$(stat -f '%d' "$parent") || return 1
+    stat_flag=-f
   fi
+  devices=$(find "$path" -xdev -type d -exec stat "$stat_flag" '%d' {} +) || return 1
   [ -n "$devices" ] || return 1
   while IFS= read -r device; do [ "$device" = "$dev" ] || return 1; done <<< "$devices"
 }
