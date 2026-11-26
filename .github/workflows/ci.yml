@@ -33,8 +33,11 @@ jobs:
           fi
           /bin/bash -n cleancodeshit
           /bin/bash -n install.sh
-          node "$RUNNER_TEMP/cleancodeshit-tools/node_modules/shellcheck/bin/shellcheck.js" \
-            -x -P SCRIPTDIR cleancodeshit install.sh tests/run-tests.sh tests/test_helper.bash tests/shims/*
+          # Lint once, on Linux: the ShellCheck binary download is rate limited on macOS runners.
+          if [ "$RUNNER_OS" = Linux ]; then
+            node "$RUNNER_TEMP/cleancodeshit-tools/node_modules/shellcheck/bin/shellcheck.js" \
+              -x -P SCRIPTDIR cleancodeshit install.sh tests/run-tests.sh tests/test_helper.bash tests/shims/*
+          fi
       - name: Run fake HOME tests
         shell: /bin/bash {0}
         env:
