@@ -4,8 +4,8 @@
 
 | Version | Status |
 | --- | --- |
-| 2.1.0 | Supported, first public release |
-| 2.0.0 | Not supported, private build |
+| 1.1.0 | Supported, first public release |
+| 1.0.0 | Not supported, private build |
 | Earlier | Not supported |
 
 Only the latest public release receives fixes.

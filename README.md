@@ -6,7 +6,7 @@
 
 # Clean Code Shit
 
-Clean Code Shit is a local command for macOS and Linux that scans developer caches, Docker disk usage, browser downloads, model caches, and AI agent logs. It shows what each item uses and what it would do, then removes only the lines you confirm. Version 2.1.0 is the first public release; 2.0.0 was private.
+Clean Code Shit is a local command for macOS and Linux that scans developer caches, Docker disk usage, browser downloads, model caches, and AI agent logs. It shows what each item uses and what it would do, then removes only the lines you confirm. Version 1.1.0 is the first public release; 1.0.0 was private.
 
 ![Sample terminal output with fake fixture data](docs/sample-terminal.png)
 
@@ -28,7 +28,7 @@ Clean Code Shit does the boring part for you:
 
 ## Install
 
-Download the three files from the [v2.1.0 release](https://github.com/bankerneel/cleancodeshit/releases/tag/v2.1.0) into one directory: `cleancodeshit`, `cleancodeshit.sha256`, and `install.sh`. Keep them together, then check the checksum before running anything.
+Download the three files from the [v1.1.0 release](https://github.com/bankerneel/cleancodeshit/releases/tag/v1.1.0) into one directory: `cleancodeshit`, `cleancodeshit.sha256`, and `install.sh`. Keep them together, then check the checksum before running anything.
 
 ```sh
 # Linux
@@ -169,7 +169,7 @@ Docker items go through the Docker CLI rather than filesystem paths. `dk_custom`
 
 ## Windows next
 
-Version 2.1.0 supports macOS and Linux. Windows support is next, including Windows cache paths, file safety checks, and a native installer.
+Version 1.1.0 supports macOS and Linux. Windows support is next, including Windows cache paths, file safety checks, and a native installer.
 
 ## Links
 

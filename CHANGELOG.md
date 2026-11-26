@@ -2,9 +2,9 @@
 
 All notable changes to Clean Code Shit are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project does not use semantic versioning for its release names.
 
-## [2.1.0] - 2026-11-27
+## [1.1.0] - 2026-11-27
 
-First public release. Version 2.0.0 was a private build used for internal testing and was never published.
+First public release. Version 1.0.0 was a private build used for internal testing and was never published.
 
 ### Added
 
@@ -32,6 +32,6 @@ First public release. Version 2.0.0 was a private build used for internal testin
 - The command refuses to run as root.
 - Danger items require the full word `yes` typed at the prompt and cannot be selected by a preset or by `--yes`.
 
-## [2.0.0] - private
+## [1.0.0] - private
 
 Internal baseline. Built for local use by the author and a small group of testers. It introduced the scan, choose, confirm, clean, and report loop, the three risk levels, and the package manager, build cache, and Docker items. It was never released publicly and had no public documentation or installer.
