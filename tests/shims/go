@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# shellcheck source=_log.sh
+. "$(dirname -- "$0")/_log.sh"
+ccs_shim_log go "$@"
+exit 0

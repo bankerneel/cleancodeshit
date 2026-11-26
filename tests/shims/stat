@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Translate BSD device-ID syntax when testing macOS paths with GNU stat.
+case "${CCS_REAL_UNAME:-}:${1:-}:${2:-}" in
+  Darwin:*) ;;
+  *:-f:%d) shift 2; set -- -c '%d' "$@" ;;
+esac
+if [ -n "${CCS_FAKE_MOUNT:-}" ] && [ "${2:-}" = '%d' ]; then
+  flag="$1"
+  shift 2
+  for path do
+    if [ "$path" = "$CCS_FAKE_MOUNT" ]; then printf '9999999999\n'
+    else "$CCS_REAL_STAT" "$flag" '%d' "$path" || exit; fi
+  done
+  exit 0
+fi
+exec "$CCS_REAL_STAT" "$@"

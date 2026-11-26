@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    name: Shell checks on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install pinned tools locally
+        shell: /bin/bash {0}
+        run: |
+          set -eu
+          npm install --prefix "$RUNNER_TEMP/cleancodeshit-tools" --no-save --no-package-lock --no-audit --no-fund bats@1.13.0 shellcheck@4.1.0
+      - name: Check Bash and lint scripts
+        shell: /bin/bash {0}
+        run: |
+          set -eu
+          /bin/bash --version
+          if [ "$RUNNER_OS" = macOS ]; then
+            /bin/bash -c 'test "$BASH_VERSINFO" = 3 && test "${BASH_VERSINFO[1]}" = 2'
+          fi
+          /bin/bash -n cleancodeshit
+          /bin/bash -n install.sh
+          node "$RUNNER_TEMP/cleancodeshit-tools/node_modules/shellcheck/bin/shellcheck.js" \
+            -x -P SCRIPTDIR cleancodeshit install.sh tests/run-tests.sh tests/test_helper.bash tests/shims/*
+      - name: Run fake HOME tests
+        shell: /bin/bash {0}
+        env:
+          BASH_UNDER_TEST: /bin/bash
+        run: |
+          set -eu
+          export PATH="$RUNNER_TEMP/cleancodeshit-tools/node_modules/bats/bin:$PATH"
+          /bin/bash tests/run-tests.sh

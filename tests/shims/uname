@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# shellcheck source=_log.sh
+. "$(dirname -- "$0")/_log.sh"
+ccs_shim_log uname "$@"
+printf '%s\n' "${CCS_FAKE_UNAME:-Linux}"
+exit 0

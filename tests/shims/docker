@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=_log.sh
+. "$(dirname -- "$0")/_log.sh"
+ccs_shim_log docker "$@"
+[ "${CCS_DOCKER_ENABLED:-0}" = 1 ] || exit 1
+if [ "${1:-}" = --context ] || [ "${1:-}" = --host ]; then shift 2; fi
+case "${1:-} ${2:-}" in
+  'context show') printf 'sample\n' ;;
+  'context inspect') cat "$CCS_DOCKER_ENDPOINT_FILE" ;;
+  'version --format') printf '28.0\n' ;;
+  'system df')
+    printf '%s\n' 'Images|80MB|40MB (50%)' 'Containers|10MB|5MB (50%)' 'Local Volumes|5MB|5MB (100%)' 'Build Cache|4MB|4MB (100%)' ;;
+  'ps -aq') printf '%s\n' first second ;;
+  'ps -q') printf '%s\n' first ;;
+  'image ls')
+    printf '%s\n' 'ccs-test/alpha|1|aaa|2MB' 'ccs-test/beta|2|bbb|6MB' 'ccs-test/keep|3|ccc|3MB'
+    if [ "${CCS_DOCKER_ROTATE_ENDPOINT:-0}" = 1 ]; then
+      printf '%s\n' 'unix:///replaced-sample-docker.sock' >"$CCS_DOCKER_ENDPOINT_FILE"
+    fi ;;
+  'network ls') printf '%s\n' demo ;;
+  'volume ls') printf '%s\n' volume ;;
+esac

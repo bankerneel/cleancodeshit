@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# shellcheck source=_log.sh
+. "$(dirname -- "$0")/_log.sh"
+ccs_shim_log ps "$@"
+if [ -n "${CCS_PS_OUTPUT_FILE:-}" ] && [ -f "$CCS_PS_OUTPUT_FILE" ]; then
+  cat -- "$CCS_PS_OUTPUT_FILE"
+fi
+exit 0

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# shellcheck source=_log.sh
+. "$(dirname -- "$0")/_log.sh"
+ccs_shim_log ollama "$@"
+if [ "${1:-}" = list ] && [ -n "${CCS_OLLAMA_LIST_FILE:-}" ] &&
+  [ -f "$CCS_OLLAMA_LIST_FILE" ]; then
+  cat -- "$CCS_OLLAMA_LIST_FILE"
+fi
+exit 0

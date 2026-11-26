@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=_log.sh
+. "$(dirname -- "$0")/_log.sh"
+ccs_shim_log npm "$@"
+case " $* " in
+  *' config get cache '*) printf '%s\n' "$HOME/.npm" ;;
+  *' cache clean '*)
+    if [ -n "${CCS_INTERRUPT_PIDS:-}" ]; then
+      sleep 30 &
+      sleeper=$!
+      printf '%s %s\n' "$$" "$sleeper" >"$CCS_INTERRUPT_PIDS"
+      wait "$sleeper"
+    fi ;;
+esac

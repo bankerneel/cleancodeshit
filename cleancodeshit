@@ -1,0 +1,1834 @@
+#!/usr/bin/env bash
+#
+# cleancodeshit: interactive cleanup of developer tool caches and Docker disk space.
+#
+# 1. Scans every cache it knows about and shows what each one uses.
+# 2. Asks which ones to clean (numbers, ranges, names or presets).
+# 3. Shows the plan and asks for confirmation.
+# 4. Cleans, one item at a time, with live progress.
+# 5. Scans again and shows what was freed, item by item.
+#
+# Nothing is removed without confirmation. Anything that can lose data (Docker
+# volumes, running containers) needs "yes" typed in full and is never part of a
+# preset. Runs that clean write a private log in the user's log directory.
+#
+# Works with the bash 3.2 that ships with macOS. Run `cleancodeshit --help` for options.
+# The item table dispatches probes and cleanup functions by name.
+# shellcheck disable=SC2329
+
+set -o pipefail
+
+VERSION="2.1.0"
+PROG="${0##*/}"
+
+# ----------------------------------------------------------------------------
+# Options
+# ----------------------------------------------------------------------------
+
+MODE="interactive"      # interactive | list
+DRY_RUN=0
+ASSUME_YES=0
+PRESELECT=""
+USE_COLOR=1
+STALE_ROOT=""
+STALE_REQUESTED=0
+STALE_DAYS=30
+STALE_DAYS_SET=0
+
+usage() {
+  cat <<EOF
+$PROG $VERSION: free disk space used by developer tool caches and Docker.
+
+Usage:
+  $PROG                       scan, choose, confirm, clean, report
+  $PROG --list                scan and show usage only; change nothing
+  $PROG --dry-run             go through the whole flow but run nothing
+  $PROG --select ITEMS        preselect items and skip the picker
+  $PROG --select ITEMS --yes  clean without any prompt (safe and caution items only)
+
+ITEMS is a list of numbers, ranges, item names or presets, separated by
+spaces or commas, for example "1 3 5-7", "npm,uv,dk_build" or "safe".
+  safe   every item marked safe
+  all    every safe and caution item, except opt-in stale folders
+
+Options:
+  -l, --list        show usage and exit
+  -n, --dry-run     show what would run; change nothing
+  -s, --select L    preselect items (see above)
+  -y, --yes         do not ask for confirmation (refuses danger items)
+      --in DIR      include stale project folders under DIR in your home
+      --older-than DAYS
+                    project inactivity threshold (default: 30 days)
+      --no-color    plain output (also honoured: NO_COLOR=1)
+      --ascii       ASCII symbols only
+  -h, --help        this help
+  -V, --version     print the version
+
+Risk levels:
+  safe     a cache the tool rebuilds or re-downloads on demand
+  caution  re-download is slow or large, or it removes old versions
+  danger   can lose data; needs "yes" typed in full, never in a preset
+EOF
+}
+
+ASCII_ONLY="${CLEANCODESHIT_ASCII:-0}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -l|--list) MODE="list" ;;
+    -n|--dry-run) DRY_RUN=1 ;;
+    -y|--yes) ASSUME_YES=1 ;;
+    -s|--select)
+      [ $# -ge 2 ] || { echo "$PROG: --select needs a value" >&2; exit 2; }
+      PRESELECT="$2"; shift ;;
+    --select=*) PRESELECT="${1#--select=}" ;;
+    --in|--older-than)
+      [ $# -ge 2 ] || { echo "$PROG: $1 needs a value" >&2; exit 2; }
+      if [ "$1" = --in ]; then STALE_ROOT="$2"; STALE_REQUESTED=1
+      else STALE_DAYS="$2"; STALE_DAYS_SET=1; fi
+      shift ;;
+    --in=*) STALE_ROOT="${1#*=}"; STALE_REQUESTED=1 ;;
+    --older-than=*) STALE_DAYS="${1#*=}"; STALE_DAYS_SET=1 ;;
+    --no-color) USE_COLOR=0 ;;
+    --ascii) ASCII_ONLY=1 ;;
+    -h|--help) usage; exit 0 ;;
+    -V|--version) echo "$PROG $VERSION"; exit 0 ;;
+    *) echo "$PROG: unknown option '$1' (try --help)" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if [ "$(id -u)" -eq 0 ]; then
+  echo "$PROG: do not run this as root; it cleans the caches of the user running it." >&2
+  exit 1
+fi
+
+# ----------------------------------------------------------------------------
+# Look and feel
+# ----------------------------------------------------------------------------
+
+C_RESET="" C_BOLD="" C_DIM="" C_RED="" C_GREEN="" C_YELLOW="" C_BLUE="" C_MAGENTA="" C_CYAN=""
+if [ "$USE_COLOR" = 1 ] && [ -z "${NO_COLOR:-}" ] && [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
+  C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'
+  C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'; C_MAGENTA=$'\033[35m'; C_CYAN=$'\033[36m'
+fi
+
+if [ "$ASCII_ONLY" = 1 ] || [ "${TERM:-}" = "dumb" ]; then
+  G_OK="OK"; G_FAIL="X"; G_ARROW=">"; G_DOT="*"
+  G_FULL="#"; G_EMPTY="."
+  G_TL="+"; G_TR="+"; G_BL="+"; G_BR="+"; G_H="-"; G_V="|"
+  FRAMES=("|" "/" "-" "\\")
+else
+  G_OK="✔"; G_FAIL="✘"; G_ARROW="›"; G_DOT="●"
+  G_FULL="█"; G_EMPTY="░"
+  G_TL="╭"; G_TR="╮"; G_BL="╰"; G_BR="╯"; G_H="─"; G_V="│"
+  FRAMES=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+fi
+
+IS_TTY=0
+if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then IS_TTY=1; fi
+
+repeat() { local s="$1" n="$2" out="" i=0; while [ "$i" -lt "$n" ]; do out="$out$s"; i=$((i + 1)); done; printf '%s' "$out"; }
+
+# ----------------------------------------------------------------------------
+# Big title: "ANSI Shadow" block letters, one glyph row at a time.
+# Override the words with CLEANCODESHIT_TITLE (letters A C D E H I L N O S T only).
+# ----------------------------------------------------------------------------
+
+TITLE="${CLEANCODESHIT_TITLE:-CLEAN CODE SHIT}"
+
+# Sets GLY to row $2 (0 to 5) of letter $1; returns 1 for an unknown letter.
+glyph() {
+  case "$1" in
+    C) case "$2" in 0) GLY=' ██████╗';; 1) GLY='██╔════╝';; 2|3) GLY='██║     ';; 4) GLY='╚██████╗';; 5) GLY=' ╚═════╝';; esac ;;
+    L) case "$2" in 0) GLY='██╗     ';; 1|2|3) GLY='██║     ';; 4) GLY='███████╗';; 5) GLY='╚══════╝';; esac ;;
+    E) case "$2" in 0|4) GLY='███████╗';; 1) GLY='██╔════╝';; 2) GLY='█████╗  ';; 3) GLY='██╔══╝  ';; 5) GLY='╚══════╝';; esac ;;
+    A) case "$2" in 0) GLY=' █████╗ ';; 1) GLY='██╔══██╗';; 2) GLY='███████║';; 3) GLY='██╔══██║';; 4) GLY='██║  ██║';; 5) GLY='╚═╝  ╚═╝';; esac ;;
+    N) case "$2" in 0) GLY='███╗   ██╗';; 1) GLY='████╗  ██║';; 2) GLY='██╔██╗ ██║';; 3) GLY='██║╚██╗██║';; 4) GLY='██║ ╚████║';; 5) GLY='╚═╝  ╚═══╝';; esac ;;
+    O) case "$2" in 0) GLY=' ██████╗ ';; 1) GLY='██╔═══██╗';; 2|3) GLY='██║   ██║';; 4) GLY='╚██████╔╝';; 5) GLY=' ╚═════╝ ';; esac ;;
+    D) case "$2" in 0) GLY='██████╗ ';; 1) GLY='██╔══██╗';; 2|3) GLY='██║  ██║';; 4) GLY='██████╔╝';; 5) GLY='╚═════╝ ';; esac ;;
+    S) case "$2" in 0|2) GLY='███████╗';; 1) GLY='██╔════╝';; 3) GLY='╚════██║';; 4) GLY='███████║';; 5) GLY='╚══════╝';; esac ;;
+    H) case "$2" in 0) GLY='██╗  ██╗';; 1|4) GLY='██║  ██║';; 2) GLY='███████║';; 3) GLY='██╔══██║';; 5) GLY='╚═╝  ╚═╝';; esac ;;
+    I) case "$2" in 0) GLY='██╗';; 1|2|3|4) GLY='██║';; 5) GLY='╚═╝';; esac ;;
+    T) case "$2" in 0) GLY='████████╗';; 1) GLY='╚══██╔══╝';; 2|3|4) GLY='   ██║   ';; 5) GLY='   ╚═╝   ';; esac ;;
+    " ") GLY='   ' ;;
+    *) return 1 ;;
+  esac
+}
+
+# Column width of each glyph (counted here, so the result never depends on the locale).
+glyph_cols() {
+  case "$1" in
+    N) echo 10 ;; O|T) echo 9 ;; I|" ") echo 3 ;; *) echo 8 ;;
+  esac
+}
+
+# Display width of one word in glyph columns, or -1 if it has an unknown letter.
+word_width() {
+  local w="$1" k=0 total=0 ch
+  while [ "$k" -lt "${#w}" ]; do
+    ch="${w:k:1}"
+    glyph "$ch" 0 || { echo -1; return; }
+    total=$(( total + $(glyph_cols "$ch") ))
+    k=$((k + 1))
+  done
+  echo "$total"
+}
+
+# Prints a line of words in block letters, with a top-to-bottom colour gradient.
+print_big_line() {
+  local text="$1" row k line colors=() c
+  if [ -n "$C_RESET" ] && [ "$(tput colors 2>/dev/null || echo 8)" -ge 256 ]; then
+    colors=($'\033[38;5;51m' $'\033[38;5;45m' $'\033[38;5;39m' $'\033[38;5;33m' $'\033[38;5;63m' $'\033[38;5;99m')
+  else
+    colors=("$C_CYAN" "$C_CYAN" "$C_CYAN" "$C_BLUE" "$C_BLUE" "$C_MAGENTA")
+  fi
+  row=0
+  while [ "$row" -lt 6 ]; do
+    line=""; k=0
+    while [ "$k" -lt "${#text}" ]; do
+      glyph "${text:k:1}" "$row"; line="$line$GLY"; k=$((k + 1))
+    done
+    c="${colors[row]}"
+    printf '  %s%s%s%s\n' "$C_BOLD" "$c" "$line" "$C_RESET"
+    row=$((row + 1))
+  done
+}
+
+# Big title when the terminal is wide enough and Unicode-capable, else nothing.
+big_title() {
+  local cols full w word fits=1
+  [ "$IS_TTY" = 1 ] && [ "$ASCII_ONLY" != 1 ] || return 1
+  cols=$(tput cols 2>/dev/null || echo 80)
+  full=$(word_width "$TITLE")
+  [ "$full" -ge 0 ] || return 1
+  echo
+  if [ $((full + 4)) -le "$cols" ]; then
+    print_big_line "$TITLE"
+    return 0
+  fi
+  # Too wide for one line: one word per line, if every word fits.
+  for word in $TITLE; do
+    w=$(word_width "$word"); [ $((w + 4)) -le "$cols" ] || fits=0
+  done
+  [ "$fits" = 1 ] || return 1
+  for word in $TITLE; do print_big_line "$word"; done
+  return 0
+}
+
+banner() {
+  local title="cleancodeshit $VERSION" sub="free disk space from developer caches and Docker"
+  if big_title; then
+    sub="cleancodeshit $VERSION  -  $sub"
+    local width=$(( ${#sub} + 6 ))
+    if [ $((width + 2)) -gt "$(tput cols 2>/dev/null || echo 80)" ]; then
+      printf '\n  %s%s%s\n  %s%s%s\n\n' "$C_BOLD$C_CYAN" "cleancodeshit $VERSION" "$C_RESET" "$C_DIM" "free disk space from developer caches and Docker" "$C_RESET"
+      return
+    fi
+    printf '\n  %s%s%s%s%s\n' "$C_CYAN" "$G_TL" "$(repeat "$G_H" $((width - 2)))" "$G_TR" "$C_RESET"
+    printf '  %s%s%s  %s%s%s  %s%s%s\n' "$C_CYAN" "$G_V" "$C_RESET" "$C_BOLD$C_CYAN" "$sub" "$C_RESET" "$C_CYAN" "$G_V" "$C_RESET"
+    printf '  %s%s%s%s%s\n\n' "$C_CYAN" "$G_BL" "$(repeat "$G_H" $((width - 2)))" "$G_BR" "$C_RESET"
+    return
+  fi
+  local width=$(( ${#sub} + 6 ))
+  local pad_t=$(( width - ${#title} - 4 ))
+  printf '\n%s%s%s%s%s\n' "$C_CYAN" "$G_TL" "$(repeat "$G_H" $((width - 2)))" "$G_TR" "$C_RESET"
+  printf '%s%s%s  %s%s%s%*s%s%s%s\n' "$C_CYAN" "$G_V" "$C_RESET" "$C_BOLD" "$title" "$C_RESET" "$pad_t" "" "$C_CYAN" "$G_V" "$C_RESET"
+  printf '%s%s%s  %s%s%s  %s%s%s\n' "$C_CYAN" "$G_V" "$C_RESET" "$C_DIM" "$sub" "$C_RESET" "$C_CYAN" "$G_V" "$C_RESET"
+  printf '%s%s%s%s%s\n\n' "$C_CYAN" "$G_BL" "$(repeat "$G_H" $((width - 2)))" "$G_BR" "$C_RESET"
+}
+
+section() { printf '\n  %s%s %s%s\n' "$C_BOLD$C_BLUE" "$G_ARROW" "$1" "$C_RESET"; }
+info()    { printf '  %s\n' "$*"; }
+note()    { printf '  %s%s%s\n' "$C_DIM" "$*" "$C_RESET"; }
+warn()    { printf '  %s%s%s\n' "$C_YELLOW" "$*" "$C_RESET"; }
+fail()    { printf '  %s%s%s\n' "$C_RED" "$*" "$C_RESET" >&2; }
+
+# Bytes to a human size, binary units.
+human() {
+  awk -v b="$1" 'BEGIN {
+    if (b < 0) { print "-"; exit }
+    split("B KiB MiB GiB TiB", u, " "); i = 1
+    while (b >= 1024 && i < 5) { b /= 1024; i++ }
+    if (i == 1) printf "%d %s", b, u[i]; else printf "%.1f %s", b, u[i]
+  }'
+}
+
+# A bar of `width` cells, filled in proportion to value/max.
+bar() {
+  local value="$1" max="$2" width="${3:-14}" filled=0
+  if [ "$max" -gt 0 ] && [ "$value" -gt 0 ]; then
+    filled=$(awk -v v="$value" -v m="$max" -v w="$width" 'BEGIN { f = int(v * w / m + 0.5); if (f < 1) f = 1; if (f > w) f = w; print f }')
+  fi
+  printf '%s%s%s%s%s' "$C_CYAN" "$(repeat "$G_FULL" "$filled")" "$C_DIM" "$(repeat "$G_EMPTY" $((width - filled)))" "$C_RESET"
+}
+
+risk_badge() {
+  case "$1" in
+    safe)    printf '%s%-7s%s' "$C_GREEN" "safe" "$C_RESET" ;;
+    caution) printf '%s%-7s%s' "$C_YELLOW" "caution" "$C_RESET" ;;
+    danger)  printf '%s%-7s%s' "$C_BOLD$C_RED" "danger" "$C_RESET" ;;
+  esac
+}
+
+# ----------------------------------------------------------------------------
+# Environment
+# ----------------------------------------------------------------------------
+
+OS=$(uname -s)
+case "${XDG_CACHE_HOME:-}" in /*) XDG_CACHE="${XDG_CACHE_HOME%/}" ;; *) XDG_CACHE="$HOME/.cache" ;; esac
+case "${XDG_CONFIG_HOME:-}" in /*) XDG_CONFIG="${XDG_CONFIG_HOME%/}" ;; *) XDG_CONFIG="$HOME/.config" ;; esac
+case "${XDG_DATA_HOME:-}" in /*) XDG_DATA="${XDG_DATA_HOME%/}" ;; *) XDG_DATA="$HOME/.local/share" ;; esac
+case "${XDG_STATE_HOME:-}" in /*) XDG_STATE="$XDG_STATE_HOME" ;; *) XDG_STATE="$HOME/.local/state" ;; esac
+case "$OS" in
+  Darwin) CACHE_ROOT="$HOME/Library/Caches"; LOG_DIR="$HOME/Library/Logs/cleancodeshit"; EDITOR_ROOT="$HOME/Library/Application Support" ;;
+  Linux)  CACHE_ROOT="$XDG_CACHE"; LOG_DIR="${XDG_STATE%/}/cleancodeshit"; EDITOR_ROOT="$XDG_CONFIG" ;;
+  *)
+    if [ "$MODE" = list ] || [ "$DRY_RUN" = 1 ]; then
+      banner
+      note "Cache scanning is available on macOS and Linux. This system was skipped."
+      [ "$DRY_RUN" = 0 ] || note "Dry run: nothing was changed."
+      exit 0
+    fi
+    fail "Cache cleanup is available on macOS and Linux."
+    exit 1 ;;
+esac
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+HOME_PHYSICAL=""
+if [ -n "${HOME:-}" ]; then HOME_PHYSICAL=$(CDPATH='' cd -P -- "$HOME" 2>/dev/null && pwd -P); fi
+
+# Resolve the spelling of HOME, then reject traversal and all symlink components.
+# Missing descendants are accepted so deleting a vanished cache is idempotent.
+home_path() {
+  local p="$1" rest part parent="$HOME_PHYSICAL"
+  [ -n "$HOME_PHYSICAL" ] && [ "$HOME_PHYSICAL" != / ] || return 1
+  while [ "${p%/}" != "$p" ]; do p="${p%/}"; done
+  case "$p" in
+    "$HOME_PHYSICAL"/*) rest="${p#"$HOME_PHYSICAL"/}" ;;
+    "${HOME%/}"/*) rest="${p#"${HOME%/}"/}" ;;
+    *) return 1 ;;
+  esac
+  case "/$rest/" in *'//'*|*'/./'*|*'/../'*|*'/.git/'*) return 1 ;; esac
+  while [ -n "$rest" ]; do
+    part="${rest%%/*}"
+    parent="$parent/$part"
+    [ ! -L "$parent" ] || return 1
+    [ "$rest" != "$part" ] || break
+    rest="${rest#*/}"
+  done
+  VALID_PATH="$parent"
+}
+
+# Directory sizes for user caches come from disk usage, without following links.
+dir_bytes() {
+  if ! home_path "$1" || [ ! -d "$VALID_PATH" ]; then echo -1; return; fi
+  path_bytes "$VALID_PATH" || echo -1
+}
+
+path_bytes() {
+  local k
+  k=$(LC_ALL=C du -skx "$1" 2>/dev/null | awk 'NR == 1 {print $1}') || return 1
+  printf '%s\n' "$(( ${k:-0} * 1024 ))"
+}
+
+same_file_system() {
+  local path="$1" parent="$2" dev device devices mount_point
+  if [ "$OS" = Linux ] && [ -r /proc/self/mountinfo ]; then
+    while read -r _ _ _ _ mount_point _; do
+      printf -v mount_point '%b' "$mount_point"
+      case "$mount_point" in "$path"|"$path"/*) return 1 ;; esac
+    done </proc/self/mountinfo
+  fi
+  if [ "$OS" = Darwin ]; then
+    dev=$(stat -f '%d' "$parent") || return 1
+    devices=$(find "$path" -xdev -type d -exec stat -f '%d' {} +) || return 1
+  else
+    dev=$(stat -c '%d' "$parent") || return 1
+    devices=$(find "$path" -xdev -type d -exec stat -c '%d' {} +) || return 1
+  fi
+  [ -n "$devices" ] || return 1
+  while IFS= read -r device; do [ "$device" = "$dev" ] || return 1; done <<< "$devices"
+}
+
+safe_rm() (
+  local p="$1" parent base
+  if ! home_path "$p"; then
+    printf 'refusing to remove %q: expected a path inside HOME without symlinks\n' "$p" >&2
+    return 1
+  fi
+  p="$VALID_PATH"
+  [ -e "$p" ] || return 0
+  parent="${p%/*}"; base="${p##*/}"
+  if ! CDPATH='' cd -P -- "$parent" || [ "$(pwd -P)" != "$parent" ] || [ -L "./$base" ]; then
+    printf 'refusing to remove %q: path changed\n' "$p" >&2
+    return 1
+  fi
+  if [ -d "./$base" ] && ! same_file_system "$p" "$parent"; then
+    printf 'refusing to remove %q: mounted or unreadable directory\n' "$p" >&2
+    return 1
+  fi
+  printf 'removing %q\n' "$p"
+  rm -rf -- "./$base"
+)
+
+run_in_home_cache() {
+  local cache="$1"
+  shift
+  home_path "$cache" && [ -d "$VALID_PATH" ] || { fail "Cache path is unavailable or outside HOME."; return 1; }
+  same_file_system "$VALID_PATH" "${VALID_PATH%/*}" || { fail "Cache path is mounted or unreadable."; return 1; }
+  "$@"
+}
+
+disk_free_bytes() { df -k "$HOME" 2>/dev/null | awk 'NR == 2 { printf "%.0f", $4 * 1024 }'; }
+disk_total_bytes() { df -k "$HOME" 2>/dev/null | awk 'NR == 2 { printf "%.0f", $2 * 1024 }'; }
+
+# Docker reports sizes in SI units ("9.413GB").
+si_bytes() {
+  awk -v s="$1" 'BEGIN {
+    n = s + 0; u = s; gsub(/[0-9.]/, "", u); m = 1
+    if (u == "kB" || u == "KB") m = 1e3; else if (u == "MB") m = 1e6
+    else if (u == "GB") m = 1e9; else if (u == "TB") m = 1e12
+    printf "%.0f", n * m
+  }'
+}
+
+DOCKER_OK=0
+DOCKER_WHY=""
+DOCKER_PATTERNS=()
+MATCHED_IMAGES=()
+DOCKER_ARGS=()
+DOCKER_ENDPOINT=""
+DOCKER_CONTEXT_NAME=""
+
+select_docker_endpoint() {
+  if [ -z "${DOCKER_CONTEXT:-}" ] && [ -n "${DOCKER_HOST:-}" ]; then
+    DOCKER_ARGS=(--host "$DOCKER_HOST")
+    DOCKER_CONTEXT_NAME=""
+    return 0
+  fi
+  DOCKER_CONTEXT_NAME=$(docker context show 2>/dev/null) || return 1
+  [ -n "$DOCKER_CONTEXT_NAME" ] || return 1
+  DOCKER_ARGS=(--context "$DOCKER_CONTEXT_NAME")
+  DOCKER_ENDPOINT=$(docker_context_endpoint) && [ -n "$DOCKER_ENDPOINT" ]
+}
+
+docker_context_endpoint() {
+  docker context inspect --format '{{(index .Endpoints "docker").Host}}' "$DOCKER_CONTEXT_NAME" 2>/dev/null
+}
+
+docker_cmd() { docker "${DOCKER_ARGS[@]}" "$@"; }
+
+docker_endpoint_unchanged() {
+  [ -z "$DOCKER_CONTEXT_NAME" ] || [ "$(docker_context_endpoint)" = "$DOCKER_ENDPOINT" ]
+}
+
+load_docker_patterns() {
+  local config="${XDG_CONFIG%/}/cleancodeshit/config" value="" line pattern seen=0
+  DOCKER_PATTERNS=()
+  if [ "${CLEANCODESHIT_DOCKER_IMAGES+x}" = x ]; then
+    value="$CLEANCODESHIT_DOCKER_IMAGES"
+  elif [ -f "$config" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%$'\r'}"
+      line="${line#"${line%%[![:blank:]]*}"}"
+      line="${line%"${line##*[![:blank:]]}"}"
+      case "$line" in
+        ''|\#*) ;;
+        docker_images=*)
+          [ "$seen" = 0 ] || { warn "Ignoring Docker image patterns: repeated docker_images key."; return; }
+          value="${line#*=}"; seen=1 ;;
+        *) warn "Ignoring Docker image patterns: invalid configuration line."; return ;;
+      esac
+    done <"$config"
+  fi
+  value="${value//$'\n'/ }"
+  IFS=$' ,\t' read -r -a DOCKER_PATTERNS <<< "$value"
+  for pattern in "${DOCKER_PATTERNS[@]}"; do
+    if [[ ! "$pattern" =~ ^[[:alnum:]_./:*?-]+$ ]]; then
+      warn "Ignoring Docker image patterns: expected repository or repository:tag globs."
+      DOCKER_PATTERNS=()
+      return
+    fi
+  done
+}
+
+load_matching_images() {
+  local repo tag image_id size pattern ref ids=()
+  MATCHED_IMAGES=(); D_MATCHED=0
+  [ "${#DOCKER_PATTERNS[@]}" -gt 0 ] || return 0
+  while IFS='|' read -r repo tag image_id size; do
+    [[ "$repo" =~ ^[[:alnum:]_][[:alnum:]_./:-]*$ && "$tag" =~ ^[[:alnum:]_][[:alnum:]_.-]*$ ]] || continue
+    ref="$repo:$tag"
+    for pattern in "${DOCKER_PATTERNS[@]}"; do
+      # The configuration supplies an actual glob.
+      # shellcheck disable=SC2053
+      if [[ "$repo" == $pattern || "$ref" == $pattern ]]; then
+        contains "$ref" "${MATCHED_IMAGES[@]}" || MATCHED_IMAGES[${#MATCHED_IMAGES[@]}]="$ref"
+        if ! contains "$image_id" "${ids[@]}"; then
+          ids[${#ids[@]}]="$image_id"
+          D_MATCHED=$((D_MATCHED + $(si_bytes "$size")))
+        fi
+        break
+      fi
+    done
+  done < <(docker_cmd image ls --format '{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}' 2>/dev/null)
+}
+
+load_docker() {
+  D_IMG=0; D_CTR=0; D_CTR_ALL=0; D_VOL=0; D_BLD=0
+  D_CTR_TOTAL=0; D_CTR_RUNNING=0; D_NET=0; D_VOL_N=0
+  MATCHED_IMAGES=(); D_MATCHED=0
+  DOCKER_OK=0
+  if ! have docker; then DOCKER_WHY="docker is not installed"; return; fi
+  if [ "${#DOCKER_ARGS[@]}" -eq 0 ] && ! select_docker_endpoint; then
+    DOCKER_WHY="could not identify the Docker endpoint"; return
+  fi
+  if ! docker_endpoint_unchanged; then DOCKER_WHY="the selected Docker endpoint changed"; return; fi
+  if ! docker_cmd version --format '{{.Server.Version}}' >/dev/null 2>&1; then
+    DOCKER_WHY="Docker is not running (start OrbStack or Docker Desktop)"; return
+  fi
+  DOCKER_OK=1
+  local t size recl r
+  while IFS='|' read -r t size recl; do
+    r="${recl%% *}"
+    case "$t" in
+      Images)          D_IMG=$(si_bytes "$r") ;;
+      Containers)      D_CTR=$(si_bytes "$r"); D_CTR_ALL=$(si_bytes "$size") ;;
+      "Local Volumes") D_VOL=$(si_bytes "$r") ;;
+      "Build Cache")   D_BLD=$(si_bytes "$r") ;;
+    esac
+  done < <(docker_cmd system df --format '{{.Type}}|{{.Size}}|{{.Reclaimable}}' 2>/dev/null)
+  D_CTR_TOTAL=$(docker_cmd ps -aq 2>/dev/null | wc -l | tr -d ' ')
+  D_CTR_RUNNING=$(docker_cmd ps -q 2>/dev/null | wc -l | tr -d ' ')
+  D_NET=$(docker_cmd network ls --filter type=custom -q 2>/dev/null | wc -l | tr -d ' ')
+  D_VOL_N=$(docker_cmd volume ls -q --filter dangling=true 2>/dev/null | wc -l | tr -d ' ')
+  load_matching_images
+}
+
+resolve_paths() {
+  local path
+  NPM_CACHE="${npm_config_cache:-${NPM_CONFIG_CACHE:-}}"
+  if [ -z "$NPM_CACHE" ] && have npm; then
+    NPM_CACHE=$(npm --logs-max=0 --update-notifier=false --timing=false config get cache 2>/dev/null) || NPM_CACHE=""
+  fi
+  NPM_CACHE="${NPM_CACHE:-$HOME/.npm}"
+  NPM_CACHE="${NPM_CACHE%/}"
+  if [ "$OS" = Darwin ]; then
+    YARN_CACHE="${YARN_CACHE_FOLDER:-$CACHE_ROOT/Yarn}"
+    PNPM_ROOT="${PNPM_HOME:-$HOME/Library/pnpm}"
+  else
+    YARN_CACHE="${YARN_CACHE_FOLDER:-$CACHE_ROOT/yarn}"
+    PNPM_ROOT="${PNPM_HOME:-$XDG_DATA/pnpm}"
+  fi
+  PNPM_ROOT="${PNPM_ROOT%/}/store"
+  PNPM_CACHE=""
+  for path in "$PNPM_ROOT"/v[0-9]*; do
+    if home_path "$path" && [ -d "$VALID_PATH" ]; then PNPM_CACHE="$path"; fi
+  done
+  UV_CACHE="${UV_CACHE_DIR:-$XDG_CACHE/uv}"
+  BREW_CACHE="${HOMEBREW_CACHE:-$CACHE_ROOT/Homebrew}"
+  GO_CACHE="${GOCACHE:-$CACHE_ROOT/go-build}"
+  PIP_CACHE="${PIP_CACHE_DIR:-$CACHE_ROOT/pip}"
+  PRECOMMIT_CACHE="${PRE_COMMIT_HOME:-$XDG_CACHE/pre-commit}"
+  GRADLE_CACHE="${GRADLE_USER_HOME:-$HOME/.gradle}"
+  GRADLE_CACHE="${GRADLE_CACHE%/}/caches"
+}
+
+# ----------------------------------------------------------------------------
+# Items
+#
+# Each item has an id, a group, a risk, a label and the action it runs.
+# probe_<id> sets PROBE_BYTES (and optionally PROBE_NOTE) and returns 0 when the
+# item exists. clean_<id> does the cleaning; its output goes to the log.
+# Docker items are listed in the order they must run: containers before
+# images (an image is only "unused" once its containers are gone), volumes last.
+# ----------------------------------------------------------------------------
+
+N=0
+add() { IDS[N]="$1"; GROUP[N]="$2"; RISK[N]="$3"; LABEL[N]="$4"; ACTION[N]="$5"; N=$((N + 1)); }
+
+add npm        "Package managers"      safe    "npm cache"                              "npm cache clean --force"
+add npx        "Package managers"      safe    "npx downloaded tools"                   "remove the npx folder in the npm cache"
+add pnpm       "Package managers"      safe    "pnpm store (packages no project uses)"  "pnpm store prune"
+add yarn       "Package managers"      safe    "Yarn cache"                             "remove versioned Yarn cache directories"
+add bun        "Package managers"      safe    "bun install cache"                      "remove ~/.bun/install/cache"
+add uv         "Package managers"      safe    "uv cache (unused entries)"              "uv cache prune"
+add pip        "Package managers"      safe    "pip download cache"                     "remove the pip cache folder (installed packages untouched)"
+add brew       "Package managers"      caution "Homebrew downloads and old versions"    "brew cleanup --prune=all"
+add xcode      "Build and tool caches" safe    "Xcode DerivedData"                      "remove DerivedData (Xcode rebuilds it)"
+add playwright "Build and tool caches" caution "Playwright browsers"                    "remove them (npx playwright install brings them back)"
+add electron   "Build and tool caches" safe    "Electron and electron-builder downloads" "remove both download caches"
+add nodegyp    "Build and tool caches" safe    "node-gyp headers"                       "remove the node-gyp cache"
+add typescript "Build and tool caches" safe    "TypeScript type cache"                  "remove the TypeScript cache"
+add go         "Build and tool caches" safe    "Go build cache"                         "go clean -cache"
+add cargo      "Build and tool caches" safe    "Cargo crate downloads"                  "remove ~/.cargo/registry/cache"
+add cocoapods  "Build and tool caches" safe    "CocoaPods cache"                        "remove the CocoaPods cache"
+add gradle     "Build and tool caches" caution "Gradle caches"                          "remove the Gradle caches directory"
+add precommit  "Build and tool caches" safe    "pre-commit environments"                "remove ~/.cache/pre-commit"
+add dk_all     "Docker"                danger  "ALL containers, running ones included"  "docker stop, then docker rm every container"
+add dk_stopped "Docker"                danger  "Stopped containers"                     "docker container prune -f"
+add dk_custom  "Docker"                danger  "Images matching your configuration"    "docker image rm each matching tag, without force"
+add dk_images  "Docker"                danger  "Unused images"                          "docker image prune -af"
+add dk_build   "Docker"                safe    "Build cache"                            "docker builder prune -af"
+add dk_net     "Docker"                safe    "Unused networks"                        "docker network prune -f"
+add dk_volumes "Docker"                danger  "Unused volumes (may hold databases)"    "docker volume prune -af"
+add claude_debug   "AI coding agents"   safe    "Claude Code debug logs"            "remove per-session debug text files"
+add claude_history "AI coding agents"   danger  "Claude Code session transcripts"   "remove recorded project conversations; sessions cannot be resumed"
+add codex_logs     "AI coding agents"   safe    "Codex CLI logs"                    "remove the default CLI log directory"
+add codex_history  "AI coding agents"   danger  "Codex CLI session transcripts"     "remove saved rollouts and prompt history; sessions cannot be resumed"
+add gemini_history "AI coding agents"   danger  "Gemini CLI session transcripts"    "remove recorded chats; sessions cannot be resumed"
+add copilot_logs   "AI coding agents"   safe    "GitHub Copilot CLI logs"           "remove the log directory"
+add opencode_logs  "AI coding agents"   safe    "OpenCode logs"                     "remove the log directory"
+add vscode         "AI coding agents"   safe    "VS Code logs and caches"           "remove logs, disk cache, code cache and VSIX downloads"
+add cursor         "AI coding agents"   safe    "Cursor logs and caches (macOS)"    "remove logs, disk cache and code cache"
+add windsurf       "AI coding agents"   safe    "Windsurf and Devin Desktop logs"   "remove logs and crash dumps"
+add puppeteer      "AI coding agents"   caution "Puppeteer browser downloads"       "remove downloaded browser binaries"
+add hf_hub         "Local models"      caution "Hugging Face Hub models"           "remove locally cached model repositories"
+add ollama         "Local models"      caution "Ollama models"                     "remove model manifests and blobs in your home"
+add torch_hub      "Local models"      caution "PyTorch Hub cache"                 "remove downloaded repositories and weights"
+add lm_studio      "Local models"      caution "LM Studio GGUF models"             "remove downloaded GGUF model files"
+if [ "$STALE_REQUESTED" = 1 ]; then
+  add stale "Projects" caution "Stale project folders" "remove the listed dependency, build and cache folders"
+fi
+
+probe_dir() { PROBE_BYTES=$(dir_bytes "$1"); [ "$PROBE_BYTES" -ge 0 ]; }
+
+probe_npm()        { have npm || return 1; probe_dir "$NPM_CACHE/_cacache"; }
+probe_npx()        { probe_dir "$NPM_CACHE/_npx"; }
+probe_pnpm()       { have pnpm && probe_dir "$PNPM_CACHE" || return 1; PROBE_NOTE="only packages no project uses are removed, so the saving can be small"; }
+probe_yarn()       {
+  home_path "$YARN_CACHE" && [ -d "$VALID_PATH" ] || return 1
+  probe_dirs "$VALID_PATH"/v[0-9]*
+}
+probe_bun()        { probe_dir "$HOME/.bun/install/cache"; }
+probe_uv()         { have uv && probe_dir "$UV_CACHE" || return 1; PROBE_NOTE="removes unused entries only; the size shown is the whole cache"; }
+probe_pip()        { probe_dirs "$PIP_CACHE/http" "$PIP_CACHE/http-v2" "$PIP_CACHE/wheels" "$PIP_CACHE/selfcheck"; }
+probe_brew()       { have brew && probe_dir "$BREW_CACHE" || return 1; PROBE_NOTE="also removes old versions of installed formulae"; }
+probe_xcode()      { [ "$OS" = Darwin ] && probe_dir "$HOME/Library/Developer/Xcode/DerivedData"; }
+probe_playwright() { probe_dir "$CACHE_ROOT/ms-playwright" || return 1; PROBE_NOTE="browsers re-download on the next playwright install"; }
+probe_electron()   {
+  local a b; a=$(dir_bytes "$CACHE_ROOT/electron"); b=$(dir_bytes "$CACHE_ROOT/electron-builder")
+  [ "$a" -ge 0 ] || [ "$b" -ge 0 ] || return 1
+  [ "$a" -ge 0 ] || a=0; [ "$b" -ge 0 ] || b=0
+  PROBE_BYTES=$((a + b))
+}
+probe_nodegyp()    { probe_dir "$CACHE_ROOT/node-gyp"; }
+probe_typescript() { probe_dir "$CACHE_ROOT/typescript"; }
+probe_go()         { have go && probe_dir "$GO_CACHE"; }
+probe_cargo()      { probe_dir "$HOME/.cargo/registry/cache"; }
+probe_cocoapods()  { [ "$OS" = Darwin ] && probe_dir "$CACHE_ROOT/CocoaPods"; }
+probe_gradle()     { probe_dir "$GRADLE_CACHE" || return 1; PROBE_NOTE="dependencies re-download on the next build"; }
+probe_precommit()  {
+  local cache target marker
+  home_path "$PRECOMMIT_CACHE" && [ -f "$VALID_PATH/db.db" ] || return 1
+  cache="$VALID_PATH"
+  [ -f "$cache/README" ] && [ ! -L "$cache/README" ] || return 1
+  IFS= read -r marker <"$cache/README" || return 1
+  [ "$marker" = 'This directory is maintained by the pre-commit project.' ] || return 1
+  probe_target file "$cache/db.db" || return 1
+  for target in "$cache"/repo????????; do probe_target dir "$target" || continue; done
+}
+
+probe_dk_all()     {
+  [ "$DOCKER_OK" = 1 ] && [ "$D_CTR_TOTAL" -gt 0 ] || return 1
+  PROBE_BYTES=$D_CTR_ALL
+  PROBE_NOTE="stops $D_CTR_RUNNING running container(s) and removes all $D_CTR_TOTAL; their data is lost"
+}
+probe_dk_stopped() {
+  [ "$DOCKER_OK" = 1 ] && [ $((D_CTR_TOTAL - D_CTR_RUNNING)) -gt 0 ] || return 1
+  PROBE_BYTES=$D_CTR; PROBE_NOTE="$((D_CTR_TOTAL - D_CTR_RUNNING)) stopped; their writable layers are lost"
+}
+probe_dk_custom()  {
+  [ "${#MATCHED_IMAGES[@]}" -gt 0 ] || return 1
+  PROBE_BYTES=$D_MATCHED
+  PROBE_NOTE="${#MATCHED_IMAGES[@]} matching tag(s); shared layers can reduce savings"
+  PROBE_DETAILS=("${MATCHED_IMAGES[@]}")
+}
+probe_dk_images()  { [ "$DOCKER_OK" = 1 ] && [ "$D_IMG" -gt 0 ] || return 1; PROBE_BYTES=$D_IMG; PROBE_NOTE="local-only images can be lost; more frees up once containers are removed"; }
+probe_dk_build()   { [ "$DOCKER_OK" = 1 ] && [ "$D_BLD" -gt 0 ] || return 1; PROBE_BYTES=$D_BLD; }
+probe_dk_net()     { [ "$DOCKER_OK" = 1 ] && [ "$D_NET" -gt 0 ] || return 1; PROBE_BYTES=-1; PROBE_NOTE="$D_NET custom network(s); only unused ones go"; }
+probe_dk_volumes() {
+  [ "$DOCKER_OK" = 1 ] && { [ "$D_VOL" -gt 0 ] || [ "$D_VOL_N" -gt 0 ]; } || return 1
+  PROBE_BYTES=$D_VOL; PROBE_NOTE="named and anonymous volumes no container uses; databases live here"
+}
+
+clean_npm()        { run_in_home_cache "$NPM_CACHE/_cacache" npm --cache "$NPM_CACHE" cache clean --force; }
+clean_npx()        { safe_rm "$NPM_CACHE/_npx"; }
+clean_pnpm() {
+  local entry store
+  home_path "$PNPM_ROOT" || return 1
+  for entry in "$VALID_PATH"/v[0-9]*; do [ ! -L "$entry" ] || return 1; done
+  store=$(pnpm --store-dir "$PNPM_ROOT" store path) || return 1
+  run_in_home_cache "$store" pnpm --store-dir "$PNPM_ROOT" store prune
+}
+clean_yarn()       { clean_targets; }
+clean_bun()        { safe_rm "$HOME/.bun/install/cache"; }
+clean_uv()         { run_in_home_cache "$UV_CACHE" uv --cache-dir "$UV_CACHE" cache prune; }
+clean_pip()        { clean_targets; }
+clean_brew()       { HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_CACHE="$BREW_CACHE" run_in_home_cache "$BREW_CACHE" brew cleanup --prune=all; }
+clean_xcode()      { safe_rm "$HOME/Library/Developer/Xcode/DerivedData"; }
+clean_playwright() { safe_rm "$CACHE_ROOT/ms-playwright"; }
+clean_electron()   { safe_rm "$CACHE_ROOT/electron" && safe_rm "$CACHE_ROOT/electron-builder"; }
+clean_nodegyp()    { safe_rm "$CACHE_ROOT/node-gyp"; }
+clean_typescript() { safe_rm "$CACHE_ROOT/typescript"; }
+clean_go()         { GOCACHE="$GO_CACHE" run_in_home_cache "$GO_CACHE" go clean -cache; }
+clean_cargo()      { safe_rm "$HOME/.cargo/registry/cache"; }
+clean_cocoapods()  { safe_rm "$CACHE_ROOT/CocoaPods"; }
+clean_gradle()     { safe_rm "$GRADLE_CACHE"; }
+clean_precommit()  { clean_targets; }
+
+clean_dk_all() {
+  local id output running=() all=()
+  output=$(docker_cmd ps -aq) || return
+  while IFS= read -r id; do [ -z "$id" ] || all[${#all[@]}]="$id"; done <<< "$output"
+  output=$(docker_cmd ps -q) || return
+  while IFS= read -r id; do
+    if [ -n "$id" ] && contains "$id" "${all[@]}"; then running[${#running[@]}]="$id"; fi
+  done <<< "$output"
+  [ "${#running[@]}" -eq 0 ] || docker_cmd stop -- "${running[@]}" || return
+  [ "${#all[@]}" -eq 0 ] || docker_cmd rm -- "${all[@]}"
+}
+clean_dk_stopped() { docker_cmd container prune -f; }
+clean_dk_custom()  {
+  local ref rc=0
+  for ref in "${MATCHED_IMAGES[@]}"; do docker_cmd image rm -- "$ref" || rc=1; done
+  return "$rc"
+}
+clean_dk_images()  { docker_cmd image prune -af; }
+clean_dk_build()   { docker_cmd builder prune -af; }
+clean_dk_net()     { docker_cmd network prune -f; }
+clean_dk_volumes() { docker_cmd volume prune -af 2>/dev/null || docker_cmd volume prune -f; }
+
+# ----------------------------------------------------------------------------
+# Agent and model paths
+# ----------------------------------------------------------------------------
+
+resolve_agent_paths() {
+  local config="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" hf_home="${HF_HOME:-$XDG_CACHE/huggingface}"
+  CLAUDE_HOME="${config%/}"
+  CLAUDE_DEBUG="$CLAUDE_HOME/debug"
+  CODEX_ROOT="${CODEX_HOME:-$HOME/.codex}"; CODEX_ROOT="${CODEX_ROOT%/}"
+  GEMINI_ROOT="${GEMINI_CLI_HOME:-$HOME}"; GEMINI_ROOT="${GEMINI_ROOT%/}/.gemini"
+  COPILOT_ROOT="${COPILOT_HOME:-$HOME/.copilot}"; COPILOT_ROOT="${COPILOT_ROOT%/}"
+  OPENCODE_LOG="${XDG_DATA%/}/opencode/log"
+  VSCODE_ROOT="${VSCODE_APPDATA:-$EDITOR_ROOT}"; VSCODE_ROOT="${VSCODE_ROOT%/}/Code"
+  if [ -n "${VSCODE_PORTABLE:-}" ]; then VSCODE_ROOT="${VSCODE_PORTABLE%/}/user-data"; fi
+  CURSOR_ROOT="${EDITOR_ROOT%/}/Cursor"
+  PUPPETEER_ROOT="${PUPPETEER_CACHE_DIR:-$HOME/.cache/puppeteer}"; PUPPETEER_ROOT="${PUPPETEER_ROOT%/}"
+  HF_ROOT="${HF_HUB_CACHE:-${HUGGINGFACE_HUB_CACHE:-${hf_home%/}/hub}}"; HF_ROOT="${HF_ROOT%/}"
+  OLLAMA_ROOT="${OLLAMA_MODELS:-$HOME/.ollama/models}"; OLLAMA_ROOT="${OLLAMA_ROOT%/}"
+  TORCH_ROOT="${TORCH_HOME:-$XDG_CACHE/torch}"; TORCH_ROOT="${TORCH_ROOT%/}/hub"
+  LM_ROOT="$HOME/.lmstudio/models"
+}
+
+probe_target() {
+  local kind="$1" path="$2"
+  home_path "$path" || return 1
+  path="$VALID_PATH"
+  case "$kind" in
+    dir) [ -d "$path" ] || return 1 ;;
+    file) [ -f "$path" ] || return 1 ;;
+  esac
+  TARGET_BYTES=$(path_bytes "$path") || return 1
+  PROBE_BYTES=$((PROBE_BYTES + TARGET_BYTES))
+  PROBE_TARGETS[${#PROBE_TARGETS[@]}]="$path"
+  PROBE_KINDS[${#PROBE_KINDS[@]}]="$kind"
+}
+
+probe_dirs() {
+  local path
+  for path in "$@"; do probe_target dir "$path" || continue; done
+  [ "${#PROBE_TARGETS[@]}" -gt 0 ]
+}
+
+probe_agent_files() {
+  local root="$1" depth="$2" name="$3" file
+  home_path "$root" && [ -d "$VALID_PATH" ] || return 0
+  while IFS= read -r -d '' file; do probe_target file "$file" || continue; done < <(
+    find "$VALID_PATH" -mindepth "$depth" -maxdepth "$depth" -name .git -prune -o -type f -name "$name" -print0 2>/dev/null
+  )
+}
+
+probe_claude_debug() {
+  local log name candidates=()
+  if [ -n "${CLAUDE_CODE_DEBUG_LOGS_DIR:-}" ]; then
+    candidates=("$CLAUDE_CODE_DEBUG_LOGS_DIR")
+  else
+    home_path "$CLAUDE_DEBUG" && [ -d "$VALID_PATH" ] || return 1
+    candidates=("$VALID_PATH"/*.txt)
+  fi
+  for log in "${candidates[@]}"; do
+    name="${log##*/}"
+    if [[ ! "$name" =~ ^[a-fA-F0-9]{8}(-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}\.txt$ &&
+          ! "$name" =~ ^claude-debug[-._a-zA-Z0-9]*\.(log|txt)$ ]]; then continue; fi
+    probe_target file "$log" || continue
+  done
+  [ "${#PROBE_TARGETS[@]}" -gt 0 ]
+}
+probe_claude_history() {
+  probe_agent_files "$CLAUDE_HOME/projects" 2 '*.jsonl'
+  [ "${#PROBE_TARGETS[@]}" -gt 0 ]
+}
+probe_codex_logs()     { probe_dirs "$CODEX_ROOT/log"; }
+probe_codex_history() {
+  local year month day
+  # Restrict rollouts to the recorder's dated layout.
+  if home_path "$CODEX_ROOT/sessions" && [ -d "$VALID_PATH" ]; then
+  for year in "$VALID_PATH"/[0-9][0-9][0-9][0-9]; do
+    home_path "$year" && [ -d "$VALID_PATH" ] || continue
+    for month in "$year"/[0-9][0-9]; do
+      home_path "$month" && [ -d "$VALID_PATH" ] || continue
+      for day in "$month"/[0-9][0-9]; do probe_agent_files "$day" 1 'rollout-*.jsonl'; done
+    done
+  done
+  fi
+  probe_agent_files "$CODEX_ROOT/archived_sessions" 1 'rollout-*.jsonl'
+  probe_target file "$CODEX_ROOT/history.jsonl" || :
+  [ "${#PROBE_TARGETS[@]}" -gt 0 ]
+}
+probe_gemini_history() {
+  local project
+  if home_path "$GEMINI_ROOT/tmp" && [ -d "$VALID_PATH" ]; then
+    for project in "$VALID_PATH"/*; do
+      home_path "$project" && [ -d "$VALID_PATH" ] || continue
+      probe_agent_files "$project/chats" 1 'session-*.json'
+      probe_agent_files "$project/chats" 1 'session-*.jsonl'
+    done
+  fi
+  [ "${#PROBE_TARGETS[@]}" -gt 0 ]
+}
+probe_copilot_logs()   { probe_dirs "$COPILOT_ROOT/logs"; }
+probe_opencode_logs()  { probe_dirs "$OPENCODE_LOG"; }
+
+editor_closed() {
+  local app="$1" processes
+  processes=$(ps -ax -o comm= 2>/dev/null) || return 1
+  ! printf '%s\n' "$processes" | awk -v app="$app" '
+    { sub(/^.*\//, ""); sub(/^[[:space:]]+/, ""); name = tolower($0) }
+    app == "VS Code" && (name == "code" || name == "electron" || name == "visual studio code" || name ~ /^code helper/) { running = 1 }
+    app == "Cursor" && (name == "cursor" || name ~ /^cursor helper/) { running = 1 }
+    app == "Windsurf and Devin Desktop" && (name == "windsurf" || name == "devin" || name == "devin-desktop" || name ~ /^(windsurf|devin) helper/) { running = 1 }
+    END { exit !running }'
+}
+
+probe_editor() {
+  local name="$1"
+  shift
+  probe_dirs "$@" || return 1
+  if ! editor_closed "$name"; then
+    SCAN_NOTES[${#SCAN_NOTES[@]}]="$name skipped: close the app to scan its logs and caches, or check that process status is available."
+    return 1
+  fi
+}
+
+probe_vscode() {
+  probe_editor 'VS Code' "$VSCODE_ROOT/logs" "$VSCODE_ROOT/CachedData" "$VSCODE_ROOT/Cache" "$VSCODE_ROOT/CachedExtensionVSIXs"
+}
+probe_cursor() {
+  [ "$OS" = Darwin ] || return 1
+  probe_editor Cursor "$CURSOR_ROOT/logs" "$CURSOR_ROOT/CachedData" "$CURSOR_ROOT/Cache" "$CURSOR_ROOT/Code Cache" "$CURSOR_ROOT/GPUCache" "$CURSOR_ROOT/CachedExtensionVSIXs"
+}
+probe_windsurf() {
+  local root="${EDITOR_ROOT%/}"
+  probe_editor 'Windsurf and Devin Desktop' "$root/Windsurf/logs" "$root/Windsurf/crashpad" "$root/Devin/logs" "$root/Devin/crashpad"
+}
+probe_puppeteer() {
+  probe_dirs "$PUPPETEER_ROOT/chrome" "$PUPPETEER_ROOT/chrome-headless-shell" "$PUPPETEER_ROOT/chromium" "$PUPPETEER_ROOT/firefox"
+}
+
+model_detail() {
+  local name="$1" detail
+  printf -v detail '%q  %s' "$name" "$(human "$TARGET_BYTES")"
+  PROBE_DETAILS[${#PROBE_DETAILS[@]}]="$detail"
+}
+
+probe_hf_hub() {
+  local repo
+  home_path "$HF_ROOT" && [ -d "$VALID_PATH" ] || return 1
+  for repo in "$VALID_PATH"/models--?*; do
+    home_path "$repo/snapshots" && [ -d "$VALID_PATH" ] || continue
+    if probe_target dir "$repo"; then model_detail "${repo##*/}"; fi
+  done
+  [ "${#PROBE_TARGETS[@]}" -gt 0 ]
+}
+
+probe_ollama() {
+  local name id number unit row
+  probe_dirs "$OLLAMA_ROOT/blobs" "$OLLAMA_ROOT/manifests" "$OLLAMA_ROOT/manifests-v2" || return 1
+  PROBE_NOTE="only the in-home model store; the CLI list describes the local server"
+  if have ollama && [ -z "${OLLAMA_HOST:-}" ]; then
+    while read -r name id number unit _; do
+      [[ "$id" =~ ^[a-fA-F0-9]+$ && "$number" =~ ^[0-9]+(\.[0-9]+)?$ ]] || continue
+      printf -v row '%q  %s %s' "$name" "$number" "$unit"
+      PROBE_DETAILS[${#PROBE_DETAILS[@]}]="$row"
+    done < <(ollama list 2>/dev/null)
+  fi
+}
+
+probe_torch_hub() {
+  local path
+  probe_dirs "$TORCH_ROOT" || return 1
+  for path in "$TORCH_ROOT"/checkpoints/*; do
+    home_path "$path" && [ -f "$VALID_PATH" ] || continue
+    TARGET_BYTES=$(path_bytes "$VALID_PATH") || continue
+    model_detail "${path##*/}"
+  done
+}
+
+probe_lm_studio() {
+  local path
+  home_path "$LM_ROOT" && [ -d "$VALID_PATH" ] || return 1
+  while IFS= read -r -d '' path; do
+    if probe_target file "$path"; then model_detail "${path#"$LM_ROOT"/}"; fi
+  done < <(find "$VALID_PATH" -mindepth 3 -maxdepth 3 -type f -name '*.gguf' -print0 2>/dev/null)
+  [ "${#PROBE_TARGETS[@]}" -gt 0 ]
+}
+
+clean_targets() {
+  local i path status=0
+  for i in "${!TARGET_ITEMS[@]}"; do
+    [ "${TARGET_ITEMS[i]}" = "$ITEM_INDEX" ] || continue
+    path="${TARGET_PATHS[i]}"
+    if ! home_path "$path"; then
+      printf 'refusing to remove %q: path changed\n' "$path" >&2
+      status=1
+      continue
+    fi
+    [ -e "$VALID_PATH" ] || continue
+    if [ "${IDS[ITEM_INDEX]}" = stale ] && ! stale_is_eligible "$path"; then
+      printf 'skipping changed project folder %q\n' "$path" >&2
+      status=1
+      continue
+    fi
+    case "${TARGET_KINDS[i]}" in
+      dir) [ -d "$VALID_PATH" ] || { status=1; continue; } ;;
+      file) [ -f "$VALID_PATH" ] || { status=1; continue; } ;;
+    esac
+    safe_rm "$path" || status=1
+  done
+  return "$status"
+}
+
+clean_claude_debug()   { clean_targets; }
+clean_claude_history() { clean_targets; }
+clean_codex_logs()     { clean_targets; }
+clean_codex_history()  { clean_targets; }
+clean_gemini_history() { clean_targets; }
+clean_copilot_logs()   { clean_targets; }
+clean_opencode_logs()  { clean_targets; }
+clean_vscode()         { editor_closed 'VS Code' && clean_targets; }
+clean_cursor()         { editor_closed Cursor && clean_targets; }
+clean_windsurf()       { editor_closed 'Windsurf and Devin Desktop' && clean_targets; }
+clean_puppeteer()      { clean_targets; }
+clean_hf_hub()         { clean_targets; }
+clean_ollama()         { clean_targets; }
+clean_torch_hub()      { clean_targets; }
+clean_lm_studio()      { clean_targets; }
+
+# ----------------------------------------------------------------------------
+# Stale project folders
+# ----------------------------------------------------------------------------
+
+STALE_ARTIFACT_NAMES=(
+  node_modules
+  .venv
+  venv
+  target
+  .next
+  dist
+  build
+  .turbo
+  .parcel-cache
+)
+
+# A directory is treated as a project when it carries one of these files.
+# Common lockfiles are included so that lockfile-only checkouts still count.
+STALE_MANIFEST_NAMES=(
+  package.json
+  package-lock.json
+  npm-shrinkwrap.json
+  yarn.lock
+  pnpm-lock.yaml
+  bun.lockb
+  deno.json
+  deno.jsonc
+  Cargo.toml
+  Cargo.lock
+  go.mod
+  go.sum
+  pyproject.toml
+  setup.py
+  setup.cfg
+  Pipfile
+  Pipfile.lock
+  poetry.lock
+  requirements.txt
+  Gemfile
+  Gemfile.lock
+  pom.xml
+  build.gradle
+  build.gradle.kts
+  settings.gradle
+  composer.json
+  composer.lock
+  mix.exs
+  mix.lock
+  CMakeLists.txt
+  Makefile
+  makefile
+  GNUmakefile
+  meson.build
+  build.zig
+  pubspec.yaml
+  Package.swift
+  Podfile
+)
+
+STALE_FIND_NAME_ARGS=()
+
+# Build the find sub-expression matching any artifact name.
+stale_build_find_name_args() {
+  STALE_FIND_NAME_ARGS=()
+  local n
+  for n in "${STALE_ARTIFACT_NAMES[@]}"; do
+    if [ ${#STALE_FIND_NAME_ARGS[@]} -eq 0 ]; then
+      STALE_FIND_NAME_ARGS+=( -name "$n" )
+    else
+      STALE_FIND_NAME_ARGS+=( -o -name "$n" )
+    fi
+  done
+}
+
+stale_build_find_name_args
+
+# Report an invalid input through the lead's fail helper, then fail the call.
+stale_invalid() {
+  fail "stale-project: $1"
+  return 1
+}
+
+# Resolve INPUT to a physical path one component at a time. Every component
+# is checked with -L before it is accepted, so a symlink anywhere in the path
+# is rejected instead of being silently resolved. Dot components are dropped,
+# dot-dot components pop the accumulated path. The result is in
+# STALE_NORMALIZED; "/" is used when the stack is empty.
+stale_normalize_physical() {
+  local input=$1 rest comp out=""
+  case $input in
+    /*) rest=$input ;;
+    *) rest="$PWD/$input" ;;
+  esac
+  while [ -n "$rest" ]; do
+    case $rest in
+      */*) comp=${rest%%/*}; rest=${rest#*/} ;;
+      *)   comp=$rest; rest="" ;;
+    esac
+    case $comp in
+      ''|.) continue ;;
+      ..)
+        out=${out%/*}
+        ;;
+      *)
+        if [ -z "$out" ]; then
+          out="/$comp"
+        else
+          out="$out/$comp"
+        fi
+        if [ -L "$out" ]; then
+          STALE_INVALID_REASON="scan root traverses symlink: $out"
+          return 1
+        fi
+        ;;
+    esac
+  done
+  [ -z "$out" ] && out="/"
+  STALE_NORMALIZED=$out
+  return 0
+}
+
+# True when any path component is exactly .git. Only the name is inspected;
+# the contents of .git are never read.
+stale_path_has_git_component() {
+  local p=$1 rest comp
+  rest=${p#/}
+  while [ -n "$rest" ]; do
+    case $rest in
+      */*) comp=${rest%%/*}; rest=${rest#*/} ;;
+      *)   comp=$rest; rest="" ;;
+    esac
+    [ "$comp" = ".git" ] && return 0
+  done
+  return 1
+}
+
+# True when any component strictly below BASE is a symlink.
+stale_path_has_symlink_below() {
+  local p=$1 base=$2 cur rest comp
+  case $p in
+    "$base"/*) rest=${p#"$base"/} ;;
+    *) return 1 ;;
+  esac
+  cur=$base
+  while [ -n "$rest" ]; do
+    case $rest in
+      */*) comp=${rest%%/*}; rest=${rest#*/} ;;
+      *)   comp=$rest; rest="" ;;
+    esac
+    [ -z "$comp" ] && continue
+    cur="$cur/$comp"
+    [ -L "$cur" ] && return 0
+  done
+  return 1
+}
+
+# Validate STALE_ROOT and STALE_DAYS. On success STALE_ROOT_PHYSICAL holds the
+# normalized root. On failure fail MESSAGE is called and 1 is returned.
+validate_stale_root() {
+  STALE_ROOT_PHYSICAL=""
+  STALE_INVALID_REASON=""
+
+  if [ -z "${HOME_PHYSICAL:-}" ]; then
+    stale_invalid "HOME_PHYSICAL is required"
+    return 1
+  fi
+
+  case ${STALE_DAYS-} in
+    ''|*[!0-9]*)
+      stale_invalid "STALE_DAYS must be an integer from 0 to 365000"
+      return 1
+      ;;
+  esac
+  if [ ${#STALE_DAYS} -gt 6 ]; then
+    stale_invalid "STALE_DAYS must be an integer from 0 to 365000"
+    return 1
+  fi
+  STALE_DAYS=$(( 10#$STALE_DAYS ))
+  if [ "$STALE_DAYS" -gt 365000 ]; then
+    stale_invalid "STALE_DAYS must be an integer from 0 to 365000"
+    return 1
+  fi
+
+  if [ -z "${STALE_ROOT:-}" ]; then
+    stale_invalid "STALE_ROOT is required"
+    return 1
+  fi
+  if ! stale_normalize_physical "$STALE_ROOT"; then
+    stale_invalid "$STALE_INVALID_REASON"
+    return 1
+  fi
+
+  local root=$STALE_NORMALIZED home=$HOME_PHYSICAL ancestor
+  while [ "$home" != "/" ] && [ "${home%/}" != "$home" ]; do
+    home=${home%/}
+  done
+
+  if [ "$root" = "/" ]; then
+    stale_invalid "STALE_ROOT must not be /"
+    return 1
+  fi
+  if [ "$root" = "$home" ]; then
+    stale_invalid "STALE_ROOT must not be HOME_PHYSICAL"
+    return 1
+  fi
+  if stale_path_has_git_component "$root"; then
+    stale_invalid "STALE_ROOT must not be inside .git"
+    return 1
+  fi
+  case $root in
+    "$home"/*) ;;
+    *)
+      stale_invalid "STALE_ROOT must be strictly inside HOME_PHYSICAL"
+      return 1
+      ;;
+  esac
+  if [ ! -d "$root" ] || [ -L "$root" ]; then
+    stale_invalid "STALE_ROOT is not a directory: $root"
+    return 1
+  fi
+  # An enclosing index outside the scan root could track the proposed artifacts.
+  ancestor="${root%/*}"
+  while [ "$ancestor" = "$home" ] || [[ "$ancestor" == "$home"/* ]]; do
+    if stale_has_git_marker "$ancestor"; then
+      stale_invalid "choose the Git repository root or a containing directory for --in"
+      return 1
+    fi
+    ancestor="${ancestor%/*}"
+  done
+
+  STALE_ROOT_PHYSICAL=$root
+  STALE_ROOT=$root
+  return 0
+}
+
+stale_name_is_artifact() {
+  local n=$1 a
+  for a in "${STALE_ARTIFACT_NAMES[@]}"; do
+    [ "$n" = "$a" ] && return 0
+  done
+  return 1
+}
+
+# Project context helpers. Existence of .git is metadata only, never read.
+stale_has_manifest() {
+  local d=$1 f p
+  for f in "${STALE_MANIFEST_NAMES[@]}"; do
+    p="$d/$f"
+    if [ -f "$p" ] && [ ! -L "$p" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+stale_has_git_marker() {
+  local p=$1/.git
+  if [ -e "$p" ] || [ -L "$p" ]; then
+    return 0
+  fi
+  return 1
+}
+
+stale_has_context() {
+  stale_has_manifest "$1" || stale_has_git_marker "$1"
+}
+
+stale_git() (
+  local project="$1"
+  shift
+  unset GIT_COMMON_DIR GIT_INDEX_FILE GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+  GIT_OPTIONAL_LOCKS=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    git -c core.fsmonitor=false -c core.excludesfile=/dev/null \
+    --git-dir="$project/.git" --work-tree="$project" -C "$project" "$@"
+)
+
+stale_safe_artifact() {
+  local path="$1" project="$2" repo="$2" relative tracked
+  while ! stale_has_git_marker "$repo" && [ "$repo" != "$STALE_ROOT_PHYSICAL" ]; do repo="${repo%/*}"; done
+  relative="./${path#"$repo"/}"
+  [ ! -L "$repo/.git" ] && [ ! -f "$repo/.git" ] || return 1
+  if [ -f "$repo/.git/index" ]; then
+    [ ! -L "$repo/.git/index" ] && have git || return 1
+    if tracked=$(stale_git "$repo" ls-files -- "$relative" 2>/dev/null); then
+      [ -z "$tracked" ] || return 1
+      if stale_git "$repo" check-ignore -q -- "$relative" 2>/dev/null; then
+        return 0
+      fi
+    else
+      return 1
+    fi
+  fi
+  case "${path##*/}" in
+    build)
+      { [ -f "$path/CMakeCache.txt" ] && [ -d "$path/CMakeFiles" ]; } ||
+        { { [ -f "$project/build.gradle" ] || [ -f "$project/build.gradle.kts" ]; } && [ -d "$path/generated" ]; } ;;
+    target)
+      { [ -f "$project/Cargo.toml" ] && [ -f "$path/CACHEDIR.TAG" ]; } ||
+        { [ -f "$project/pom.xml" ] && [ -d "$path/maven-status" ]; } ;;
+    dist) return 1 ;;
+    venv|.venv) [ -f "$path/pyvenv.cfg" ] ;;
+    *) return 0 ;;
+  esac
+}
+
+# Find the nearest ancestor of DIR, bounded by BOUNDARY, that has project
+# context. The result is placed in STALE_PROJECT_ROOT.
+STALE_PROJECT_ROOT=""
+stale_find_project_root() {
+  local cur=$1 boundary=$2
+  STALE_PROJECT_ROOT=""
+  while :; do
+    if stale_has_context "$cur"; then
+      STALE_PROJECT_ROOT=$cur
+      return 0
+    fi
+    [ "$cur" = "$boundary" ] && break
+    case $cur in "$boundary"/*) ;; *) break ;; esac
+    cur=${cur%/*}
+  done
+  return 1
+}
+
+# Portable mtime in seconds. GNU stat uses -c %Y, BSD/macOS stat uses -f %m.
+stale_file_mtime() {
+  local p=$1 m
+  m=$(stat -c %Y "$p" 2>/dev/null) && {
+    printf '%s\n' "$m"
+    return 0
+  }
+  m=$(stat -f %m "$p" 2>/dev/null) && {
+    printf '%s\n' "$m"
+    return 0
+  }
+  return 1
+}
+
+stale_source_entries() {
+  local proj="$1" path
+  while IFS= read -r -d '' path; do
+    printf '%s\0' "$path"
+    [ -n "$path" ] || return 1
+    # Ambiguous or tracked folders can contain source, even with a cache-like name.
+    if [ "$path" != "$proj" ] && [ -d "$path" ] && [ ! -L "$path" ] &&
+       stale_name_is_artifact "${path##*/}" && ! stale_safe_artifact "$path" "$proj"; then
+      find "$path" -xdev -name .git -prune -o -print0 || { printf '\0'; return 1; }
+    fi
+  done < <(find "$proj" -xdev -name .git -prune -o \
+      -type d \( "${STALE_FIND_NAME_ARGS[@]}" \) -prune -print0 -o -print0 || printf '\0')
+}
+
+# Newest mtime among source files of PROJ. Artifact trees and .git are pruned
+# by find. Directories with their own project context are recorded and their
+# files are skipped, which keeps nested projects independent. Symlinks are
+# never considered. The result is placed in STALE_NEWEST_MTIME.
+STALE_NEWEST_MTIME=""
+stale_newest_source_mtime() {
+  local proj=$1 boundary=$2
+  local p d m max=0 skipped
+  local -a pruned=()
+  STALE_NEWEST_MTIME=""
+  [ ${#STALE_FIND_NAME_ARGS[@]} -eq 0 ] && stale_build_find_name_args
+
+  while IFS= read -r -d '' p; do
+    [ -n "$p" ] || return 1
+    if [ -d "$p" ] && [ ! -L "$p" ]; then
+      if [ "$p" != "$proj" ] && stale_has_context "$p"; then
+        pruned+=( "$p" )
+      fi
+      continue
+    fi
+    if [ ! -f "$p" ] || [ -L "$p" ]; then
+      continue
+    fi
+    skipped=0
+    if [ ${#pruned[@]} -gt 0 ]; then
+      for d in "${pruned[@]}"; do
+        case $p in
+          "$d"/*) skipped=1; break ;;
+        esac
+      done
+    fi
+    [ "$skipped" -eq 1 ] && continue
+    m=$(stale_file_mtime "$p") || return 1
+    if [ "$m" -gt "$max" ]; then
+      max=$m
+    fi
+  done < <(stale_source_entries "$proj")
+
+  [ "$max" -gt 0 ] || return 1
+  STALE_NEWEST_MTIME=$max
+  return 0
+}
+
+# Decide staleness from source activity, never from artifact timestamps.
+# Sets STALE_AGE_DAYS to whole days since the newest source change.
+STALE_AGE_DAYS=""
+stale_project_is_stale() {
+  local proj=$1 boundary=$2 max
+  [ -n "${STALE_DAYS:-}" ] || return 1
+  if [ -z "${STALE_NOW:-}" ]; then
+    STALE_NOW=$(date +%s) || return 1
+  fi
+  stale_newest_source_mtime "$proj" "$boundary" || return 1
+  max=$STALE_NEWEST_MTIME
+  if [ $(( STALE_NOW - max )) -lt $(( STALE_DAYS * 86400 )) ]; then
+    return 1
+  fi
+  STALE_AGE_DAYS=$(( ( STALE_NOW - max ) / 86400 ))
+  return 0
+}
+
+# Discover stale artifacts without deleting anything.
+discover_stale() {
+  STALE_PATHS=()
+  STALE_AGES=()
+  STALE_SIZES=()
+  [ ${#STALE_FIND_NAME_ARGS[@]} -eq 0 ] && stale_build_find_name_args
+  [ -n "${STALE_DAYS:-}" ] || { stale_invalid "STALE_DAYS is required"; return 1; }
+  if [ -z "${STALE_ROOT_PHYSICAL:-}" ]; then
+    validate_stale_root || return 1
+  fi
+
+  local root=$STALE_ROOT_PHYSICAL p base parent proj size
+  STALE_NOW=$(date +%s) || return 1
+
+  while IFS= read -r -d '' p; do
+    [ -d "$p" ] && [ ! -L "$p" ] || continue
+    case $p in "$root"/*) ;; *) continue ;; esac
+    stale_path_has_git_component "$p" && continue
+    stale_path_has_symlink_below "$p" "$root" && continue
+    base=${p##*/}
+    stale_name_is_artifact "$base" || continue
+    parent=${p%/*}
+    stale_find_project_root "$parent" "$root" || continue
+    proj=$STALE_PROJECT_ROOT
+    stale_safe_artifact "$p" "$proj" || continue
+    stale_project_is_stale "$proj" "$root" || continue
+    size=$(dir_bytes "$p") || continue
+    STALE_PATHS+=( "$p" )
+    STALE_AGES+=( "$STALE_AGE_DAYS" )
+    STALE_SIZES+=( "$size" )
+  done < <(find "$root" -xdev \
+        -type d -name .git -prune -o \
+        -type d \( "${STALE_FIND_NAME_ARGS[@]}" \) -prune -print0)
+
+  return 0
+}
+
+# Recheck a candidate immediately before deletion. Success means the path is
+# still an existing, non-symlink artifact directory under the validated root,
+# still has project context, and its source is still older than the threshold.
+stale_is_eligible() {
+  local p=${1-} root=${STALE_ROOT_PHYSICAL:-} base parent proj
+  [ -n "$p" ] || return 1
+  [ -n "$root" ] || return 1
+  case $p in "$root"/*) ;; *) return 1 ;; esac
+  [ -d "$p" ] && [ ! -L "$p" ] || return 1
+  stale_path_has_git_component "$p" && return 1
+  stale_path_has_symlink_below "$p" "$root" && return 1
+  base=${p##*/}
+  stale_name_is_artifact "$base" || return 1
+  parent=${p%/*}
+  stale_find_project_root "$parent" "$root" || return 1
+  proj=$STALE_PROJECT_ROOT
+  stale_safe_artifact "$p" "$proj" || return 1
+  STALE_NOW=$(date +%s) || return 1
+  stale_project_is_stale "$proj" "$root" || return 1
+  stale_artifact_has_no_git "$p" || return 1
+  return 0
+}
+
+stale_artifact_has_no_git() {
+  local match
+  match=$(find "$1" -name .git -print -quit 2>/dev/null) && [ -z "$match" ]
+}
+
+probe_stale() {
+  local i path size detail
+  discover_stale || return 1
+  for i in "${!STALE_PATHS[@]}"; do
+    path="${STALE_PATHS[i]}"; size="${STALE_SIZES[i]}"
+    if [ "$size" -lt 0 ] || ! stale_artifact_has_no_git "$path"; then continue; fi
+    PROBE_TARGETS[${#PROBE_TARGETS[@]}]="$path"
+    PROBE_KINDS[${#PROBE_KINDS[@]}]=dir
+    PROBE_BYTES=$((PROBE_BYTES + size))
+    printf -v detail '%q  %s  %s day(s) since source changed' "${path#"$STALE_ROOT"/}" "$(human "$size")" "${STALE_AGES[i]}"
+    PROBE_DETAILS[${#PROBE_DETAILS[@]}]="$detail"
+  done
+  [ "${#PROBE_TARGETS[@]}" -gt 0 ]
+}
+
+clean_stale() { validate_stale_root && clean_targets; }
+
+# ----------------------------------------------------------------------------
+# Scan
+# ----------------------------------------------------------------------------
+
+AVAIL_IDX=()      # item indices with something to clean, in display order
+MISSING=()        # labels of items with nothing to clean here
+SCAN_NOTES=()
+DETAIL_ITEMS=() DETAIL_TEXT=()
+TARGET_ITEMS=() TARGET_PATHS=() TARGET_KINDS=()
+
+# Sets BYTES[i] and NOTE[i]. Returns 1 when there is nothing to clean: the tool
+# or folder is absent, or it is empty. Unused networks have no size (-1).
+probe_item() {
+  local i="$1"
+  PROBE_BYTES=0; PROBE_NOTE=""
+  PROBE_DETAILS=(); PROBE_TARGETS=(); PROBE_KINDS=()
+  if "probe_${IDS[i]}"; then
+    BYTES[i]="$PROBE_BYTES"; NOTE[i]="$PROBE_NOTE"; return 0
+  fi
+  BYTES[i]=-1; NOTE[i]=""; return 1
+}
+
+scan() {
+  local i j k
+  resolve_paths
+  resolve_agent_paths
+  load_docker_patterns
+  progress "Docker"
+  load_docker
+  i=0
+  while [ "$i" -lt "$N" ]; do
+    progress "${LABEL[i]}"
+    if probe_item "$i"; then
+      AVAIL_IDX[${#AVAIL_IDX[@]}]=$i
+      for j in "${!PROBE_TARGETS[@]}"; do
+        k=${#TARGET_ITEMS[@]}
+        TARGET_ITEMS[k]=$i; TARGET_PATHS[k]="${PROBE_TARGETS[j]}"; TARGET_KINDS[k]="${PROBE_KINDS[j]}"
+      done
+      for j in "${PROBE_DETAILS[@]}"; do
+        k=${#DETAIL_ITEMS[@]}
+        DETAIL_ITEMS[k]=$i; DETAIL_TEXT[k]="$j"
+      done
+    else
+      MISSING[${#MISSING[@]}]="${LABEL[i]}"
+    fi
+    i=$((i + 1))
+  done
+  progress_done
+}
+
+SCAN_STEP=0
+progress() {
+  SCAN_STEP=$((SCAN_STEP + 1))
+  [ "$IS_TTY" = 1 ] || return 0
+  printf '\r\033[K  %s%s%s Scanning %s%s%s' "$C_CYAN" "${FRAMES[$((SCAN_STEP % ${#FRAMES[@]}))]}" "$C_RESET" "$C_DIM" "$1" "$C_RESET"
+}
+progress_done() { [ "$IS_TTY" = 1 ] && printf '\r\033[K'; SCAN_STEP=0; return 0; }
+
+# ----------------------------------------------------------------------------
+# Usage table
+# ----------------------------------------------------------------------------
+
+NUM_TO_IDX=()     # display number (1-based) to item index
+
+print_table() {
+  local max=0 total=0 pos=0 i j b group="" num
+  NUM_TO_IDX=()
+  for i in "${AVAIL_IDX[@]}"; do
+    b=${BYTES[i]}
+    [ "$b" -gt "$max" ] && max=$b
+    [ "$b" -gt 0 ] && total=$((total + b))
+  done
+  for i in "${AVAIL_IDX[@]}"; do
+    pos=$((pos + 1)); NUM_TO_IDX[pos]=$i
+    if [ "${GROUP[i]}" != "$group" ]; then group="${GROUP[i]}"; section "$group"; fi
+    num=$(printf '%2d' "$pos")
+    printf '   %s%s%s  %-42s %10s  %s  %s\n' "$C_BOLD" "$num" "$C_RESET" "${LABEL[i]}" "$(human "${BYTES[i]}")" "$(bar "${BYTES[i]}" "$max")" "$(risk_badge "${RISK[i]}")"
+    [ -n "${NOTE[i]}" ] && printf '       %s%s%s\n' "$C_DIM" "${NOTE[i]}" "$C_RESET"
+    for j in "${!DETAIL_ITEMS[@]}"; do
+      [ "${DETAIL_ITEMS[j]}" != "$i" ] || printf '       %s\n' "${DETAIL_TEXT[j]}"
+    done
+  done
+  if [ "${#AVAIL_IDX[@]}" -eq 0 ]; then note "Nothing to clean was found."; fi
+  echo
+  info "$(printf '%sListed:%s %s across %d item(s)    %sDisk free:%s %s of %s' \
+    "$C_BOLD" "$C_RESET" "$(human "$total")" "${#AVAIL_IDX[@]}" \
+    "$C_BOLD" "$C_RESET" "$(human "$(disk_free_bytes)")" "$(human "$(disk_total_bytes)")")"
+  [ "$DOCKER_OK" = 1 ] || note "Docker items hidden: $DOCKER_WHY."
+  for j in "${SCAN_NOTES[@]}"; do note "$j"; done
+  if [ "${#MISSING[@]}" -gt 0 ]; then
+    local cols; cols=$(tput cols 2>/dev/null || echo 80); [ "$cols" -gt 20 ] || cols=80
+    printf 'Nothing to clean (%d): %s.\n' "${#MISSING[@]}" "$(printf '%s, ' "${MISSING[@]}" | sed 's/, $//')" \
+      | fold -s -w $((cols - 4)) | while IFS= read -r wrapped; do note "$wrapped"; done
+  fi
+}
+
+# ----------------------------------------------------------------------------
+# Selection
+# ----------------------------------------------------------------------------
+
+SELECTED=()       # item indices, in execution (display) order
+SEL_ERROR=""
+
+contains() { local x="$1"; shift; local y; for y in "$@"; do [ "$x" = "$y" ] && return 0; done; return 1; }
+
+selection_number() {
+  local number="$1"
+  case "$number" in ''|*[!0-9]*) return 1 ;; esac
+  number="${number#"${number%%[!0]*}"}"
+  [ "${#number}" -le 6 ] || return 1
+  printf '%s\n' "${number:-0}"
+}
+
+# Parses a selection into SELECTED. Returns 1 with SEL_ERROR set on bad input.
+parse_selection() {
+  local input="$1" tok lo hi n idx count="${#AVAIL_IDX[@]}" i
+  local picked=() tokens=()
+  SEL_ERROR=""
+  input="${input//$'\n'/ }"
+  IFS=$' ,\t' read -r -a tokens <<< "$input"
+  for tok in "${tokens[@]}"; do
+    case "$tok" in
+      safe|s)
+        for i in "${AVAIL_IDX[@]}"; do [ "${RISK[i]}" = "safe" ] && picked[${#picked[@]}]=$i; done ;;
+      all|a)
+        for i in "${AVAIL_IDX[@]}"; do
+          if [ "${RISK[i]}" != danger ] && [ "${IDS[i]}" != stale ]; then picked[${#picked[@]}]=$i; fi
+        done ;;
+      *-*)
+        if ! lo=$(selection_number "${tok%%-*}") || ! hi=$(selection_number "${tok#*-}"); then
+          SEL_ERROR="'$tok' is not a range"; return 1
+        fi
+        if [ "$lo" -lt 1 ] || [ "$hi" -gt "$count" ] || [ "$lo" -gt "$hi" ]; then SEL_ERROR="range '$tok' is outside 1-$count"; return 1; fi
+        n=$lo; while [ "$n" -le "$hi" ]; do picked[${#picked[@]}]=${NUM_TO_IDX[n]}; n=$((n + 1)); done ;;
+      *[!0-9]*)
+        idx=""
+        for i in "${AVAIL_IDX[@]}"; do [ "${IDS[i]}" = "$tok" ] && idx=$i; done
+        [ -n "$idx" ] || { SEL_ERROR="unknown item '$tok'"; return 1; }
+        picked[${#picked[@]}]=$idx ;;
+      *)
+        if ! n=$(selection_number "$tok") || [ "$n" -lt 1 ] || [ "$n" -gt "$count" ]; then SEL_ERROR="'$tok' is not between 1 and $count"; return 1; fi
+        picked[${#picked[@]}]=${NUM_TO_IDX[n]} ;;
+    esac
+  done
+  SELECTED=()
+  for i in "${AVAIL_IDX[@]}"; do
+    if [ "${#picked[@]}" -gt 0 ] && contains "$i" "${picked[@]}"; then SELECTED[${#SELECTED[@]}]=$i; fi
+  done
+  [ "${#SELECTED[@]}" -gt 0 ] || { SEL_ERROR="nothing selected"; return 1; }
+  return 0
+}
+
+ask_selection() {
+  local answer
+  while :; do
+    echo
+    printf '  %s%s%s Choose items: numbers, ranges or names (e.g. %s1 3 5-7%s), %ss%s = all safe, %sa%s = safe + caution, %sq%s = quit\n' \
+      "$C_MAGENTA" "$G_ARROW" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_BOLD" "$C_RESET"
+    printf '  %s%s%s ' "$C_MAGENTA" "$G_ARROW" "$C_RESET"
+    if ! IFS= read -r answer; then echo; exit 0; fi
+    case "$answer" in
+      q|Q|quit|exit) note "Nothing changed."; exit 0 ;;
+      "") continue ;;
+    esac
+    if parse_selection "$answer"; then return 0; fi
+    fail "$SEL_ERROR"
+  done
+}
+
+# ----------------------------------------------------------------------------
+# Plan and confirmation
+# ----------------------------------------------------------------------------
+
+print_plan() {
+  local i est=0 has_danger=0
+  section "Plan"
+  for i in "${SELECTED[@]}"; do
+    [ "${BYTES[i]}" -gt 0 ] && est=$((est + BYTES[i]))
+    [ "${RISK[i]}" = "danger" ] && has_danger=1
+    printf '   %s%s%s %-42s %10s  %s\n' "$C_CYAN" "$G_DOT" "$C_RESET" "${LABEL[i]}" "$(human "${BYTES[i]}")" "$(risk_badge "${RISK[i]}")"
+    printf '       %s%s%s\n' "$C_DIM" "${ACTION[i]}" "$C_RESET"
+    if [ "${IDS[i]}" = dk_custom ]; then
+      local ref
+      for ref in "${MATCHED_IMAGES[@]}"; do printf '       %s\n' "$ref"; done
+    fi
+  done
+  echo
+  info "$(printf '%sUp to %s%s could be freed (the real figure is shown afterwards).' "$C_BOLD" "$(human "$est")" "$C_RESET")"
+  PLAN_HAS_DANGER=$has_danger
+}
+
+confirm() {
+  local answer
+  if [ "$PLAN_HAS_DANGER" = 1 ]; then
+    echo
+    warn "The plan includes danger items that can lose data."
+    printf '  %sType "yes" to continue:%s ' "$C_BOLD$C_RED" "$C_RESET"
+    IFS= read -r answer || answer=""
+    [ "$answer" = "yes" ]
+    return
+  fi
+  printf '\n  %sProceed?%s [y/N] ' "$C_BOLD" "$C_RESET"
+  IFS= read -r answer || answer=""
+  case "$answer" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
+}
+
+# ----------------------------------------------------------------------------
+# Cleaning
+# ----------------------------------------------------------------------------
+
+CURRENT_PID=""
+LOG=""
+
+on_interrupt() {
+  trap '' INT TERM
+  if [ -n "$CURRENT_PID" ]; then
+    # Monitor mode gives this step and its children a separate process group.
+    kill -TERM -- "-$CURRENT_PID" 2>/dev/null || :
+    sleep 0.2
+    kill -KILL -- "-$CURRENT_PID" 2>/dev/null || :
+    wait "$CURRENT_PID" 2>/dev/null || :
+  fi
+  [ "$IS_TTY" = 1 ] && { tput cnorm 2>/dev/null; printf '\r\033[K'; }
+  echo
+  warn "Interrupted. Items already cleaned stay cleaned."
+  [ -n "$LOG" ] && note "Log: $LOG"
+  exit 130
+}
+trap on_interrupt INT TERM
+trap '[ "$IS_TTY" = 1 ] && tput cnorm 2>/dev/null' EXIT
+
+start_log() {
+  local old i limit logs=() LC_ALL=C
+  if home_path "$LOG_DIR"; then
+    LOG_DIR="$VALID_PATH"
+  else
+    stale_normalize_physical "$LOG_DIR" || return 1
+    LOG_DIR="$STALE_NORMALIZED"
+  fi
+  (umask 077; mkdir -p -- "$LOG_DIR") || return 1
+  LOG=$(umask 077; mktemp "$LOG_DIR/cleancodeshit-$(date +%Y%m%d-%H%M%S).XXXXXX") || return 1
+  {
+    echo "cleancodeshit $VERSION run at $(date)"
+    echo "user $(id -un) on $(uname -srm)"
+    echo "disk free before: $(human "$(disk_free_bytes)")"
+  } >"$LOG"
+  # Keep the latest 20 of our logs when the directory is inside the home jail.
+  if home_path "$LOG_DIR"; then
+    for old in "$LOG_DIR"/cleancodeshit-????????-??????.??????; do
+      [ -f "$old" ] && [ ! -L "$old" ] || continue
+      logs[${#logs[@]}]="$old"
+    done
+    limit=$((${#logs[@]} - 20))
+    for (( i=0; i<limit; i++ )); do
+      [ "${logs[i]}" = "$LOG" ] || safe_rm "${logs[i]}" >/dev/null || :
+    done
+  fi
+  return 0
+}
+
+run_item() {
+  local i="$1" label start rc frame=0
+  label="${LABEL[i]}"
+  start=$(date +%s)
+  printf '\n===== %s (%s) =====\n' "$label" "${IDS[i]}" >>"$LOG"
+  INTERRUPT_PENDING=0
+  trap 'INTERRUPT_PENDING=1' INT TERM
+  (
+    set +m
+    ITEM_INDEX="$i"
+    if [ "${GROUP[i]}" = Docker ] && ! docker_endpoint_unchanged; then
+      fail "The selected Docker endpoint changed. Skipping cleanup."
+      exit 1
+    fi
+    "clean_${IDS[i]}"
+  ) >>"$LOG" 2>&1 &
+  CURRENT_PID=$!
+  trap on_interrupt INT TERM
+  [ "$INTERRUPT_PENDING" = 0 ] || on_interrupt
+  if [ "$IS_TTY" = 1 ]; then
+    tput civis 2>/dev/null
+    while kill -0 "$CURRENT_PID" 2>/dev/null; do
+      printf '\r\033[K   %s%s%s %s %s(%ss)%s' "$C_CYAN" "${FRAMES[frame]}" "$C_RESET" "$label" "$C_DIM" "$(( $(date +%s) - start ))" "$C_RESET"
+      frame=$(( (frame + 1) % ${#FRAMES[@]} ))
+      sleep 0.1
+    done
+    printf '\r\033[K'
+    tput cnorm 2>/dev/null
+  fi
+  wait "$CURRENT_PID"; rc=$?
+  CURRENT_PID=""
+  RC[i]=$rc; DUR[i]=$(( $(date +%s) - start ))
+  echo "exit $rc after ${DUR[i]}s" >>"$LOG"
+  if [ "$rc" -eq 0 ]; then
+    printf '   %s%s%s %-42s %s%ss%s\n' "$C_GREEN" "$G_OK" "$C_RESET" "$label" "$C_DIM" "${DUR[i]}" "$C_RESET"
+  else
+    printf '   %s%s%s %-42s %sfailed (exit %s), see the log%s\n' "$C_RED" "$G_FAIL" "$C_RESET" "$label" "$C_RED" "$rc" "$C_RESET"
+  fi
+}
+
+# ----------------------------------------------------------------------------
+# Report
+# ----------------------------------------------------------------------------
+
+report() {
+  local i before after freed total=0 failed=0 status
+  section "Result"
+  printf '   %s%-44s %10s %10s %10s%s\n' "$C_DIM" "" "before" "after" "freed" "$C_RESET"
+  for i in "${SELECTED[@]}"; do
+    before=${BEFORE[i]}
+    after=${BYTES[i]}
+    [ "$after" -lt 0 ] && after=0
+    freed=0
+    if [ "$before" -gt 0 ] && [ "$before" -gt "$after" ]; then freed=$((before - after)); fi
+    total=$((total + freed))
+    if [ "${RC[i]}" -eq 0 ]; then status="$C_GREEN$G_OK$C_RESET"; else status="$C_RED$G_FAIL$C_RESET"; failed=$((failed + 1)); fi
+    if [ "$before" -lt 0 ]; then
+      printf '   %s %-42s %10s %10s %10s\n' "$status" "${LABEL[i]}" "-" "-" "-"
+    else
+      printf '   %s %-42s %10s %10s %s%10s%s\n' "$status" "${LABEL[i]}" "$(human "$before")" "$(human "$after")" "$C_BOLD$C_GREEN" "$(human "$freed")" "$C_RESET"
+    fi
+  done
+  echo
+  info "$(printf '%sFreed:%s %s%s%s    %sDisk free:%s %s %s %s' \
+    "$C_BOLD" "$C_RESET" "$C_BOLD$C_GREEN" "$(human "$total")" "$C_RESET" \
+    "$C_BOLD" "$C_RESET" "$(human "$DISK_BEFORE")" "$G_ARROW" "$(human "$(disk_free_bytes)")")"
+  [ "$failed" -gt 0 ] && warn "$failed item(s) failed. Details are in the log."
+  note "Log: $LOG"
+  echo "freed $(human "$total"); disk free after: $(human "$(disk_free_bytes)")" >>"$LOG"
+  [ "$failed" -eq 0 ]
+}
+
+# ----------------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------------
+
+[ -n "$HOME_PHYSICAL" ] && [ "$HOME_PHYSICAL" != / ] || { fail "HOME must be a user directory."; exit 1; }
+if [ "$STALE_REQUESTED" = 1 ]; then
+  validate_stale_root || exit 2
+elif [ "$STALE_DAYS_SET" = 1 ]; then
+  fail "--older-than requires --in."
+  exit 2
+fi
+
+banner
+scan
+print_table
+
+[ "$MODE" = "list" ] && exit 0
+if [ "${#AVAIL_IDX[@]}" -eq 0 ]; then
+  case "$PRESELECT" in
+    ''|s|safe|a|all) ;;
+    *) fail "--select: no items are available"; exit 2 ;;
+  esac
+  [ "$DRY_RUN" = 0 ] || note "Dry run: nothing was changed."
+  exit 0
+fi
+
+if [ -n "$PRESELECT" ]; then
+  if ! parse_selection "$PRESELECT"; then
+    if [ "$SEL_ERROR" = 'nothing selected' ] && { [ "$PRESELECT" = safe ] || [ "$PRESELECT" = all ]; }; then
+      note "No items match the selected preset."
+      [ "$DRY_RUN" = 0 ] || note "Dry run: nothing was changed."
+      exit 0
+    fi
+    fail "--select: $SEL_ERROR"
+    exit 2
+  fi
+elif [ -t 0 ]; then
+  ask_selection
+else
+  fail "No terminal to ask on. Use --select ITEMS (and --yes) to run without prompts."
+  exit 2
+fi
+
+print_plan
+
+if [ "$ASSUME_YES" = 1 ] && [ "$PLAN_HAS_DANGER" = 1 ]; then
+  fail "--yes does not cover danger items. Run without --yes and type \"yes\" to confirm them."
+  exit 2
+fi
+
+if [ "$DRY_RUN" = 1 ]; then
+  echo
+  note "Dry run: nothing was changed."
+  exit 0
+fi
+
+if [ "$ASSUME_YES" = 0 ]; then
+  [ -t 0 ] || { fail "No terminal to confirm on. Add --yes to run without a prompt."; exit 2; }
+  if ! confirm; then note "Cancelled. Nothing changed."; exit 0; fi
+fi
+
+for i in "${SELECTED[@]}"; do BEFORE[i]=${BYTES[i]}; done
+DISK_BEFORE=$(disk_free_bytes)
+start_log || { fail "Could not create the cleanup log. Nothing changed."; exit 1; }
+
+section "Cleaning"
+set -m
+for i in "${SELECTED[@]}"; do run_item "$i"; done
+set +m
+
+# Measure again: Docker figures come from a fresh `docker system df`.
+progress "results"
+resolve_paths
+load_docker
+for i in "${SELECTED[@]}"; do probe_item "$i" >/dev/null 2>&1 || BYTES[i]=0; done
+progress_done
+
+report
+exit $?
