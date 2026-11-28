@@ -28,6 +28,16 @@ Clean Code Shit does the boring part for you:
 
 ## Install
 
+### Homebrew
+
+```sh
+brew install bankerneel/tap/cleancodeshit
+```
+
+Upgrade with `brew upgrade cleancodeshit`; uninstall with `brew uninstall cleancodeshit`.
+
+### Manual install
+
 Download the three files from the [v1.2.0 release](https://github.com/bankerneel/cleancodeshit/releases/tag/v1.2.0) into one directory: `cleancodeshit`, `cleancodeshit.sha256`, and `install.sh`. Keep them together, then check the checksum before running anything.
 
 ```sh
