@@ -1,6 +1,6 @@
 # Items, paths, and sources
 
-This is the reference for every item Clean Code Shit 1.2.0 can clean. Paths are defaults unless an override is named. `<project>`, `<publisher>`, `<model>`, and `YYYY/MM/DD` are placeholders for values from your own system. macOS uses `~/Library/Caches` as its cache root. Linux uses `XDG_CACHE_HOME`, defaulting to `~/.cache`. The scan ignores filesystem targets outside the physical home directory.
+This is the reference for every item Clean Code Shit 1.2.1 can clean. Paths are defaults unless an override is named. `<project>`, `<publisher>`, `<model>`, and `YYYY/MM/DD` are placeholders for values from your own system. macOS uses `~/Library/Caches` as its cache root. Linux uses `XDG_CACHE_HOME`, defaulting to `~/.cache`. The scan ignores filesystem targets outside the physical home directory.
 
 Rows marked **danger** need the full word `yes` at the confirmation prompt. Rows marked **caution** are never selected by the `safe` preset. Stale folders are opt-in only and are never in any preset.
 
@@ -56,7 +56,7 @@ Docker items go through the Docker CLI rather than filesystem paths. Sizes come 
 | `cursor` | macOS `$HOME/Library/Application Support/Cursor/logs`, `CachedData`, `Cache`, `Code Cache`, `GPUCache`, `CachedExtensionVSIXs` | Remove those cache and log folders only | safe | Cursor forum, staff member deanrie: [topic 157419, post 40](https://forum.cursor.com/t/157419/40), [topic 164804, post 5](https://forum.cursor.com/t/164804/5), [topic 153436](https://forum.cursor.com/t/153436) |
 | `windsurf` | `Windsurf/{logs,crashpad}` and `Devin/{logs,crashpad}` under `~/Library/Application Support` on macOS or the XDG config root on Linux | Remove logs and crash dumps | safe | [Devin Desktop data paths and migration exclusions](https://docs.devin.ai/desktop/devin-desktop-faq#what-local-file-paths-does-the-application-read-from-and-write-to), [Electron appData](https://www.electronjs.org/docs/latest/api/app#appgetpathname) |
 
-VS Code path overrides `VSCODE_APPDATA` and `VSCODE_PORTABLE` are honoured before the XDG and macOS defaults. Cursor is offered on macOS only in 1.2.0. The scan skips these editor items while the respective application is running. Generic OS temporary directories and editor local history are excluded.
+VS Code path overrides `VSCODE_APPDATA` and `VSCODE_PORTABLE` are honoured before the XDG and macOS defaults. Cursor is offered on macOS only in 1.2.1. The scan skips these editor items while the respective application is running. Generic OS temporary directories and editor local history are excluded.
 
 ## AI agent logs and history
 

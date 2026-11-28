@@ -1,7 +1,7 @@
 class Cleancodeshit < Formula
   desc "Interactive cleanup for AI coding agent and developer caches"
   homepage "https://github.com/bankerneel/cleancodeshit"
-  url "https://github.com/bankerneel/cleancodeshit/archive/refs/tags/v1.2.0.tar.gz"
+  url "https://github.com/bankerneel/cleancodeshit/archive/refs/tags/v1.2.1.tar.gz"
   sha256 "@TARBALL_SHA256@"
   license "MIT"
 
@@ -10,6 +10,6 @@ class Cleancodeshit < Formula
   end
 
   test do
-    assert_match "cleancodeshit 1.2.0", shell_output("#{bin}/cleancodeshit --version")
+    assert_match "cleancodeshit 1.2.1", shell_output("#{bin}/cleancodeshit --version")
   end
 end

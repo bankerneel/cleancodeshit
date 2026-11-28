@@ -38,7 +38,7 @@ Upgrade with `brew upgrade cleancodeshit`; uninstall with `brew uninstall cleanc
 
 ### Manual install
 
-Download the three files from the [v1.2.0 release](https://github.com/bankerneel/cleancodeshit/releases/tag/v1.2.0) into one directory: `cleancodeshit`, `cleancodeshit.sha256`, and `install.sh`. Keep them together, then check the checksum before running anything.
+Download the three files from the [v1.2.1 release](https://github.com/bankerneel/cleancodeshit/releases/tag/v1.2.1) into one directory: `cleancodeshit`, `cleancodeshit.sha256`, and `install.sh`. Keep them together, then check the checksum before running anything.
 
 ```sh
 # Linux
@@ -184,7 +184,7 @@ Docker items go through the Docker CLI rather than filesystem paths. `dk_custom`
 
 ## Windows next
 
-Version 1.2.0 supports macOS and Linux. Windows support is next, including Windows cache paths, file safety checks, and a native installer.
+Version 1.2.1 supports macOS and Linux. Windows support is next, including Windows cache paths, file safety checks, and a native installer.
 
 ## Links
 
