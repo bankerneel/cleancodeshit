@@ -44,7 +44,9 @@ bash tests/run-tests.sh
 
 ## Website
 
-`site/` is plain static HTML, CSS, JavaScript, fonts, and images. Cloudflare Pages uses Git integration with `main` as the production branch, an empty build command, and `site` as the output directory.
+`site/` is plain static HTML, CSS, JavaScript, fonts, and images. After the site checks pass, GitHub Actions uploads this directory to the `cleancodeshit` Cloudflare Pages project. Changes to `site/` on `main` deploy to production. Pull requests from this repository with site changes deploy a preview for their branch.
+
+The deployment uses the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets. Each upload adds its deployment URL to the Actions job summary.
 
 When changing the CLI version or an item registration, update the site's release references and `CLI_ITEMS` in `site/assets/app.js` in the same pull request. Run the site checks with Node.js 22 or newer and Chrome installed.
 
