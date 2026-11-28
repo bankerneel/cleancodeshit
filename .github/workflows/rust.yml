@@ -1,0 +1,82 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'cleancodeshit'
+      - 'docs/items.md'
+      - 'site/assets/app.js'
+      - '.github/workflows/rust.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'cleancodeshit'
+      - 'docs/items.md'
+      - 'site/assets/app.js'
+      - '.github/workflows/rust.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Rust 1.100.0 tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust 1.100.0 via rustup
+        shell: bash
+        run: |
+          set -eu
+          rustup toolchain install 1.100.0 --profile minimal --no-self-update
+          rustc +1.100.0 --version
+          cargo +1.100.0 --version
+      - name: Test the locked workspace
+        shell: bash
+        run: cargo +1.100.0 test --workspace --all-targets --locked
+      - name: Check formatting
+        if: matrix.os == 'ubuntu-24.04'
+        shell: bash
+        run: |
+          set -eu
+          rustup component add rustfmt --toolchain 1.100.0
+          cargo +1.100.0 fmt --all -- --check
+      - name: Verify the generated catalog is current
+        if: matrix.os == 'ubuntu-24.04'
+        shell: bash
+        run: cargo +1.100.0 run --locked -p ccs-core --example generate_catalog -- --check
+
+  msrv:
+    name: MSRV check with Rust 1.85.0
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install exactly Rust 1.85.0 via rustup
+        shell: bash
+        run: |
+          set -eu
+          rustup toolchain install 1.85.0 --profile minimal --no-self-update
+          rustc +1.85.0 --version
+          cargo +1.85.0 --version
+      - name: Check the locked workspace with the MSRV
+        shell: bash
+        run: cargo +1.85.0 check --workspace --all-targets --locked

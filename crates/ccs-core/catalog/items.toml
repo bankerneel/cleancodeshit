@@ -1,0 +1,1856 @@
+# Catalog schema 1. Legacy entries follow the Bash registration order.
+# Roots are typed anchors with relative patterns. Overrides name settings
+# documented in the reference cells. Future actions must apply the item-specific
+# leaf allowlist after validating these anchors.
+
+schema_version = 1
+
+# ---------------------------------------------------------------------------
+# Package managers (Bash group: "Package managers")
+# ---------------------------------------------------------------------------
+
+[[items]]
+id = "npm"
+group = "Package managers"
+risk = "safe"
+label = "npm cache"
+action_id = "npm_cache_clean"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "npm_cache", path = "_cacache", overrides = ["npm_config_cache", "NPM_CONFIG_CACHE"] },
+]
+
+[items.docs]
+section = "Package managers"
+path = "`$(npm config get cache)/_cacache`, default `~/.npm/_cacache`"
+action = "`npm cache clean --force`"
+
+[[items.docs.sources]]
+label = "npm-cache"
+url = "https://docs.npmjs.com/cli/v11/commands/npm-cache"
+
+[[items]]
+id = "npx"
+group = "Package managers"
+risk = "safe"
+label = "npx downloaded tools"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "npm_cache", path = "_npx", overrides = ["npm_config_cache", "NPM_CONFIG_CACHE"] },
+]
+
+[items.docs]
+section = "Package managers"
+path = "`$(npm config get cache)/_npx`"
+action = "Remove the `_npx` folder"
+
+[[items.docs.sources]]
+label = "npx"
+url = "https://docs.npmjs.com/cli/v11/commands/npx"
+
+[[items.docs.sources]]
+label = "npm exec cache paths"
+url = "https://github.com/npm/cli/blob/latest/workspaces/libnpmexec/README.md#usage"
+
+[[items]]
+id = "pnpm"
+group = "Package managers"
+risk = "safe"
+label = "pnpm store (packages no project uses)"
+action_id = "pnpm_store_prune"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "pnpm_store", path = "", overrides = ["PNPM_HOME"] },
+]
+
+[items.docs]
+section = "Package managers"
+path = "`${PNPM_HOME:-$XDG_DATA_HOME/pnpm}/store/v*` on Linux, `${PNPM_HOME:-$HOME/Library/pnpm}/store/v*` on macOS"
+action = "`pnpm store prune` after validating the store selected by the installed pnpm"
+
+[[items.docs.sources]]
+label = "pnpm store"
+url = "https://pnpm.io/cli/store"
+
+[[items.docs.sources]]
+label = "store location"
+url = "https://pnpm.io/settings#store-dir"
+
+[[items]]
+id = "yarn"
+group = "Package managers"
+risk = "safe"
+label = "Yarn cache"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "yarn_cache", path = "", overrides = ["YARN_CACHE_FOLDER"] },
+]
+
+[items.docs]
+section = "Package managers"
+path = "macOS `~/Library/Caches/Yarn`. Linux `$XDG_CACHE_HOME/yarn`, default `~/.cache/yarn`; `YARN_CACHE_FOLDER` overrides the root"
+action = "Remove versioned Yarn Classic cache directories beneath the root"
+
+[[items.docs.sources]]
+label = "Yarn cache"
+url = "https://classic.yarnpkg.com/lang/en/docs/cli/cache/"
+
+[[items]]
+id = "bun"
+group = "Package managers"
+risk = "safe"
+label = "bun install cache"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "home", path = ".bun/install/cache" },
+]
+
+[items.docs]
+section = "Package managers"
+path = "`~/.bun/install/cache`"
+action = "Remove the install cache"
+
+[[items.docs.sources]]
+label = "bun pm cache"
+url = "https://bun.sh/docs/cli/pm#bun-pm-cache"
+
+[[items]]
+id = "uv"
+group = "Package managers"
+risk = "safe"
+label = "uv cache (unused entries)"
+action_id = "uv_cache_prune"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "cache_home", path = "uv", overrides = ["UV_CACHE_DIR"] },
+]
+
+[items.docs]
+section = "Package managers"
+path = "`${UV_CACHE_DIR:-$XDG_CACHE_HOME/uv}`"
+action = "`uv cache prune`. Gives the first attempt 30 seconds by default, then announces one `--force` retry if uv supports it (0.8.24 or newer). Set `CLEANCODESHIT_UV_LOCK_TIMEOUT` in whole seconds or use `--force-uv` / `CLEANCODESHIT_UV_FORCE=1` to start with force. Force bypasses uv's in-use check and can disturb a running uv process. Pruning still targets unused entries, so the size shown can be larger than the saving."
+
+[[items.docs.sources]]
+label = "uv cache location"
+url = "https://docs.astral.sh/uv/concepts/cache/#cache-directory"
+
+[[items.docs.sources]]
+label = "uv prune force"
+url = "https://docs.astral.sh/uv/reference/cli/#uv-cache-prune--force"
+
+[[items.docs.sources]]
+label = "uv 0.8.24 release"
+url = "https://github.com/astral-sh/uv/releases/tag/0.8.24"
+
+[[items]]
+id = "pip"
+group = "Package managers"
+risk = "safe"
+label = "pip download cache"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "cache_home", path = "pip", overrides = ["PIP_CACHE_DIR"] },
+]
+
+[items.docs]
+section = "Package managers"
+path = "macOS `~/Library/Caches/pip`. Linux `$XDG_CACHE_HOME/pip`, default `~/.cache/pip`"
+action = "Remove `http`, `http-v2`, `wheels` and `selfcheck` under the default root or `PIP_CACHE_DIR`"
+
+[[items.docs.sources]]
+label = "pip cache layout"
+url = "https://pip.pypa.io/en/stable/topics/caching/"
+
+[[items]]
+id = "brew"
+group = "Package managers"
+risk = "caution"
+label = "Homebrew downloads and old versions"
+action_id = "brew_cleanup"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "cache_home", path = "Homebrew", overrides = ["HOMEBREW_CACHE"] },
+]
+
+[items.docs]
+section = "Package managers"
+path = "`HOMEBREW_CACHE` or `~/Library/Caches/Homebrew` on macOS, `${XDG_CACHE_HOME:-$HOME/.cache}/Homebrew` on Linux"
+action = "`brew cleanup --prune=all`. Also removes old versions of installed formulae"
+
+[[items.docs.sources]]
+label = "Homebrew environment and cleanup"
+url = "https://docs.brew.sh/Manpage"
+
+# ---------------------------------------------------------------------------
+# Build and tool caches (Bash group: "Build and tool caches")
+# ---------------------------------------------------------------------------
+
+[[items]]
+id = "xcode"
+group = "Build and tool caches"
+risk = "safe"
+label = "Xcode DerivedData"
+action_id = "remove_entries"
+platforms = ["macos"]
+roots = [
+  { root = "home", path = "Library/Developer/Xcode/DerivedData", platforms = ["macos"] },
+]
+
+[items.docs]
+section = "Build and tool caches"
+path = "`~/Library/Developer/Xcode/DerivedData`"
+action = "Remove DerivedData. Xcode rebuilds it"
+
+[[items.docs.sources]]
+label = "Apple: DerivedData"
+url = "https://developer.apple.com/documentation/xcode/derived-data"
+
+[[items]]
+id = "playwright"
+group = "Build and tool caches"
+risk = "caution"
+label = "Playwright browsers"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "cache_home", path = "ms-playwright" },
+]
+
+[items.docs]
+section = "Build and tool caches"
+path = "macOS `~/Library/Caches/ms-playwright`. Linux `$XDG_CACHE_HOME/ms-playwright`"
+action = "Remove downloaded browsers; `npx playwright install` brings them back"
+
+[[items.docs.sources]]
+label = "Playwright browsers"
+url = "https://playwright.dev/docs/browsers"
+
+[[items.docs.sources]]
+label = "CLI"
+url = "https://playwright.dev/docs/cli"
+
+[[items]]
+id = "electron"
+group = "Build and tool caches"
+risk = "safe"
+label = "Electron and electron-builder downloads"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "cache_home", path = "electron" },
+  { root = "cache_home", path = "electron-builder" },
+]
+
+[items.docs]
+section = "Build and tool caches"
+path = "macOS `~/Library/Caches/electron` and `~/Library/Caches/electron-builder`. Linux `$XDG_CACHE_HOME/electron` and `$XDG_CACHE_HOME/electron-builder`"
+action = "Remove both download caches"
+
+[[items.docs.sources]]
+label = "Electron environment variables"
+url = "https://www.electronjs.org/docs/latest/api/environment-variables#electron_cache"
+
+[[items.docs.sources]]
+label = "electron-builder"
+url = "https://www.electron.build/"
+
+[[items]]
+id = "nodegyp"
+group = "Build and tool caches"
+risk = "safe"
+label = "node-gyp headers"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "cache_home", path = "node-gyp" },
+]
+
+[items.docs]
+section = "Build and tool caches"
+path = "macOS `~/Library/Caches/node-gyp`. Linux `$XDG_CACHE_HOME/node-gyp`"
+action = "Remove downloaded Node headers"
+
+[[items.docs.sources]]
+label = "node-gyp installation"
+url = "https://github.com/nodejs/node-gyp#installation"
+
+[[items.docs.sources]]
+label = "source"
+url = "https://github.com/nodejs/node-gyp/blob/main/lib/node-gyp.js"
+
+[[items]]
+id = "typescript"
+group = "Build and tool caches"
+risk = "safe"
+label = "TypeScript type cache"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "cache_home", path = "typescript" },
+]
+
+[items.docs]
+section = "Build and tool caches"
+path = "macOS `~/Library/Caches/typescript` and Linux `$XDG_CACHE_HOME/typescript` (default `~/.cache/typescript`)"
+action = "Remove the automatic type acquisition cache"
+
+[[items.docs.sources]]
+label = "TypeScript typings cache source"
+url = "https://github.com/microsoft/TypeScript/blob/v5.9.3/src/tsserver/nodeServer.ts"
+
+[[items]]
+id = "go"
+group = "Build and tool caches"
+risk = "safe"
+label = "Go build cache"
+action_id = "go_cache_clean"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "go_cache", path = "", overrides = ["GOCACHE"] },
+]
+
+[items.docs]
+section = "Build and tool caches"
+path = "`GOCACHE` or `go-build` under the platform cache root"
+action = "`go clean -cache`"
+
+[[items.docs.sources]]
+label = "Go build cache"
+url = "https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching"
+
+[[items.docs.sources]]
+label = "Go cache roots"
+url = "https://pkg.go.dev/os#UserCacheDir"
+
+[[items]]
+id = "cargo"
+group = "Build and tool caches"
+risk = "safe"
+label = "Cargo crate downloads"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "home", path = ".cargo/registry/cache" },
+]
+
+[items.docs]
+section = "Build and tool caches"
+path = "`~/.cargo/registry/cache`"
+action = "Remove crate archives. Sources and installed binaries stay"
+
+[[items.docs.sources]]
+label = "Cargo home"
+url = "https://doc.rust-lang.org/cargo/guide/cargo-home.html"
+
+[[items]]
+id = "cocoapods"
+group = "Build and tool caches"
+risk = "safe"
+label = "CocoaPods cache"
+action_id = "remove_entries"
+platforms = ["macos"]
+roots = [
+  { root = "cache_home", path = "CocoaPods", platforms = ["macos"] },
+]
+
+[items.docs]
+section = "Build and tool caches"
+path = "macOS `~/Library/Caches/CocoaPods` on macOS only"
+action = "Remove the CocoaPods cache"
+
+[[items.docs.sources]]
+label = "CocoaPods guide"
+url = "https://guides.cocoapods.org/using/using-cocoapods.html"
+
+[[items.docs.sources]]
+label = "config source"
+url = "https://github.com/CocoaPods/CocoaPods/blob/master/lib/cocoapods/config.rb"
+
+[[items]]
+id = "gradle"
+group = "Build and tool caches"
+risk = "caution"
+label = "Gradle caches"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "home", path = ".gradle/caches", overrides = ["GRADLE_USER_HOME"] },
+]
+
+[items.docs]
+section = "Build and tool caches"
+path = "`~/.gradle/caches`, or `$GRADLE_USER_HOME/caches` when set"
+action = "Remove cached dependencies. They re-download on the next build"
+
+[[items.docs.sources]]
+label = "Gradle directory layout"
+url = "https://docs.gradle.org/current/userguide/directory_layout.html"
+
+[[items]]
+id = "precommit"
+group = "Build and tool caches"
+risk = "safe"
+label = "pre-commit environments"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "cache_home", path = "pre-commit", overrides = ["PRE_COMMIT_HOME"] },
+]
+
+[items.docs]
+section = "Build and tool caches"
+path = "`$PRE_COMMIT_HOME` or `${XDG_CACHE_HOME:-$HOME/.cache}/pre-commit`"
+action = "Remove the environment directories and their cache index"
+
+[[items.docs.sources]]
+label = "pre-commit environment variables"
+url = "https://pre-commit.com/#environment-variables"
+
+[[items.docs.sources]]
+label = "store source"
+url = "https://github.com/pre-commit/pre-commit/blob/main/pre_commit/store.py"
+
+# ---------------------------------------------------------------------------
+# Docker (Bash group: "Docker"; ordered containers -> images -> volumes)
+# ---------------------------------------------------------------------------
+
+[[items]]
+id = "dk_all"
+group = "Docker"
+risk = "danger"
+label = "ALL containers, running ones included"
+action_id = "docker_remove_all_containers"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "docker_endpoint", path = "" },
+]
+
+[items.docs]
+section = "Docker"
+path = "All containers, running ones included"
+action = "`docker stop`, then `docker rm` the same set of containers. Their data is lost"
+
+[[items.docs.sources]]
+label = "docker stop"
+url = "https://docs.docker.com/reference/cli/docker/container/stop/"
+
+[[items.docs.sources]]
+label = "docker rm"
+url = "https://docs.docker.com/reference/cli/docker/container/rm/"
+
+[[items]]
+id = "dk_stopped"
+group = "Docker"
+risk = "danger"
+label = "Stopped containers"
+action_id = "docker_prune_stopped_containers"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "docker_endpoint", path = "" },
+]
+
+[items.docs]
+section = "Docker"
+path = "Stopped containers"
+action = "`docker container prune -f`. Writable layers are lost"
+
+[[items.docs.sources]]
+label = "docker container prune"
+url = "https://docs.docker.com/reference/cli/docker/container/prune/"
+
+[[items]]
+id = "dk_custom"
+group = "Docker"
+risk = "danger"
+label = "Images matching your configuration"
+action_id = "docker_remove_matching_images"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "docker_endpoint", path = "" },
+]
+
+[items.docs]
+section = "Docker"
+path = "Tagged images whose repository or repository:tag matches a configured pattern"
+action = "`docker image rm` each matching tag without force"
+
+source_note = "configuration below"
+
+[[items.docs.sources]]
+label = "docker image rm"
+url = "https://docs.docker.com/reference/cli/docker/image/rm/"
+
+[[items]]
+id = "dk_images"
+group = "Docker"
+risk = "danger"
+label = "Unused images"
+action_id = "docker_prune_images"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "docker_endpoint", path = "" },
+]
+
+[items.docs]
+section = "Docker"
+path = "Unused images"
+action = "`docker image prune -af`. Local-only images may be lost"
+
+[[items.docs.sources]]
+label = "docker image prune"
+url = "https://docs.docker.com/reference/cli/docker/image/prune/"
+
+[[items]]
+id = "dk_build"
+group = "Docker"
+risk = "safe"
+label = "Build cache"
+action_id = "docker_prune_build_cache"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "docker_endpoint", path = "" },
+]
+
+[items.docs]
+section = "Docker"
+path = "Build cache"
+action = "`docker builder prune -af`"
+
+[[items.docs.sources]]
+label = "docker builder prune"
+url = "https://docs.docker.com/reference/cli/docker/builder/prune/"
+
+[[items]]
+id = "dk_net"
+group = "Docker"
+risk = "safe"
+label = "Unused networks"
+action_id = "docker_prune_networks"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "docker_endpoint", path = "" },
+]
+
+[items.docs]
+section = "Docker"
+path = "Unused custom networks"
+action = "`docker network prune -f`"
+
+[[items.docs.sources]]
+label = "docker network prune"
+url = "https://docs.docker.com/reference/cli/docker/network/prune/"
+
+[[items]]
+id = "dk_volumes"
+group = "Docker"
+risk = "danger"
+label = "Unused volumes (may hold databases)"
+action_id = "docker_prune_volumes"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "docker_endpoint", path = "" },
+]
+
+[items.docs]
+section = "Docker"
+path = "Unused named and anonymous volumes"
+action = "`docker volume prune -af`, falling back to `docker volume prune -f`. Databases live here"
+
+[[items.docs.sources]]
+label = "docker volume prune"
+url = "https://docs.docker.com/reference/cli/docker/volume/prune/"
+
+[[items.docs.sources]]
+label = "volumes"
+url = "https://docs.docker.com/engine/storage/volumes/"
+
+# ---------------------------------------------------------------------------
+# AI coding agents (Bash group: "AI coding agents")
+# ---------------------------------------------------------------------------
+
+[[items]]
+id = "claude_debug"
+group = "AI coding agents"
+risk = "safe"
+label = "Claude Code debug logs"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "home", path = ".claude/debug", overrides = ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_DEBUG_LOGS_DIR"] },
+]
+
+[items.docs]
+section = "AI agent logs and history"
+path = "`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/debug`; `CLAUDE_CODE_DEBUG_LOGS_DIR` can point to one in-home file with a session UUID or `claude-debug` log name"
+action = "Remove debug log files"
+
+[[items.docs.sources]]
+label = "Claude directory"
+url = "https://code.claude.com/docs/en/claude-directory.md"
+
+[[items.docs.sources]]
+label = "environment variables"
+url = "https://code.claude.com/docs/en/env-vars.md"
+
+[[items]]
+id = "claude_history"
+group = "AI coding agents"
+risk = "danger"
+label = "Claude Code session transcripts"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "home", path = ".claude/projects", overrides = ["CLAUDE_CONFIG_DIR"] },
+]
+
+[items.docs]
+section = "AI agent logs and history"
+path = "`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<project>/*.jsonl`"
+action = "Remove session transcripts"
+
+[[items.docs.sources]]
+label = "Claude directory"
+url = "https://code.claude.com/docs/en/claude-directory.md"
+
+[[items]]
+id = "codex_logs"
+group = "AI coding agents"
+risk = "safe"
+label = "Codex CLI logs"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "home", path = ".codex/log", overrides = ["CODEX_HOME"] },
+]
+
+[items.docs]
+section = "AI agent logs and history"
+path = "`${CODEX_HOME:-$HOME/.codex}/log`"
+action = "Remove CLI log files"
+
+[[items.docs.sources]]
+label = "Codex environment variables"
+url = "https://developers.openai.com/codex/config-file/environment-variables.md"
+
+[[items.docs.sources]]
+label = "advanced config"
+url = "https://developers.openai.com/codex/config-file/config-advanced.md"
+
+[[items]]
+id = "codex_history"
+group = "AI coding agents"
+risk = "danger"
+label = "Codex CLI session transcripts"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "home", path = ".codex/sessions", overrides = ["CODEX_HOME"] },
+  { root = "home", path = ".codex/archived_sessions", overrides = ["CODEX_HOME"] },
+  { root = "home", path = ".codex/history.jsonl", overrides = ["CODEX_HOME"] },
+]
+
+[items.docs]
+section = "AI agent logs and history"
+path = "`${CODEX_HOME:-$HOME/.codex}/sessions/YYYY/MM/DD/rollout-*.jsonl`, `${CODEX_HOME:-$HOME/.codex}/archived_sessions/rollout-*.jsonl`, and `${CODEX_HOME:-$HOME/.codex}/history.jsonl`"
+action = "Remove rollout transcripts and history records"
+
+[[items.docs.sources]]
+label = "rollout recorder source"
+url = "https://github.com/openai/codex/blob/main/codex-rs/rollout/src/recorder.rs"
+
+[[items.docs.sources]]
+label = "environment variables"
+url = "https://developers.openai.com/codex/config-file/environment-variables.md"
+
+[[items.docs.sources]]
+label = "advanced config"
+url = "https://developers.openai.com/codex/config-file/config-advanced.md"
+
+[[items]]
+id = "gemini_history"
+group = "AI coding agents"
+risk = "danger"
+label = "Gemini CLI session transcripts"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "home", path = ".gemini/tmp", overrides = ["GEMINI_CLI_HOME"] },
+]
+
+[items.docs]
+section = "AI agent logs and history"
+path = "`${GEMINI_CLI_HOME:-$HOME}/.gemini/tmp/<project>/chats/session-*.json` and `session-*.jsonl`"
+action = "Remove recorded chats"
+
+[[items.docs.sources]]
+label = "`storage.ts`"
+url = "https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/config/storage.ts"
+
+[[items.docs.sources]]
+label = "`chatRecordingService.ts`"
+url = "https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/services/chatRecordingService.ts"
+
+[[items]]
+id = "copilot_logs"
+group = "AI coding agents"
+risk = "safe"
+label = "GitHub Copilot CLI logs"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "home", path = ".copilot/logs", overrides = ["COPILOT_HOME"] },
+]
+
+[items.docs]
+section = "AI agent logs and history"
+path = "`${COPILOT_HOME:-$HOME/.copilot}/logs`"
+action = "Remove process and extension logs. Official docs mark `logs/` safe to delete"
+
+[[items.docs.sources]]
+label = "Copilot CLI config directory reference"
+url = "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference"
+
+[[items]]
+id = "opencode_logs"
+group = "AI coding agents"
+risk = "safe"
+label = "OpenCode logs"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "data_home", path = "opencode/log" },
+]
+
+[items.docs]
+section = "AI agent logs and history"
+path = "`${XDG_DATA_HOME:-$HOME/.local/share}/opencode/log`"
+action = "Remove log files. They can contain prompts or file contents, so review before sharing them"
+
+[[items.docs.sources]]
+label = "OpenCode troubleshooting"
+url = "https://opencode.ai/docs/troubleshooting/"
+
+[[items]]
+id = "vscode"
+group = "AI coding agents"
+risk = "safe"
+label = "VS Code logs and caches"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+must_close = ["VS Code"]
+roots = [
+  { root = "config_home", path = "Code/logs", platforms = ["linux"], overrides = ["VSCODE_APPDATA", "VSCODE_PORTABLE"] },
+  { root = "config_home", path = "Code/CachedData", platforms = ["linux"], overrides = ["VSCODE_APPDATA", "VSCODE_PORTABLE"] },
+  { root = "config_home", path = "Code/Cache", platforms = ["linux"], overrides = ["VSCODE_APPDATA", "VSCODE_PORTABLE"] },
+  { root = "config_home", path = "Code/CachedExtensionVSIXs", platforms = ["linux"], overrides = ["VSCODE_APPDATA", "VSCODE_PORTABLE"] },
+  { root = "home", path = "Library/Application Support/Code/logs", platforms = ["macos"], overrides = ["VSCODE_APPDATA", "VSCODE_PORTABLE"] },
+  { root = "home", path = "Library/Application Support/Code/CachedData", platforms = ["macos"], overrides = ["VSCODE_APPDATA", "VSCODE_PORTABLE"] },
+  { root = "home", path = "Library/Application Support/Code/Cache", platforms = ["macos"], overrides = ["VSCODE_APPDATA", "VSCODE_PORTABLE"] },
+  { root = "home", path = "Library/Application Support/Code/CachedExtensionVSIXs", platforms = ["macos"], overrides = ["VSCODE_APPDATA", "VSCODE_PORTABLE"] },
+]
+
+[items.docs]
+section = "Editors"
+path = "Linux `${XDG_CONFIG_HOME:-$HOME/.config}/Code/logs`, `CachedData`, `Cache`, `CachedExtensionVSIXs`. MacOS `$HOME/Library/Application Support/Code/` with the same subfolders"
+action = "Remove those cache and log folders only. Settings and extensions stay"
+
+[[items.docs.sources]]
+label = "VS Code `userDataPath.ts`"
+url = "https://github.com/microsoft/vscode/blob/main/src/vs/platform/environment/node/userDataPath.ts"
+
+[[items.docs.sources]]
+label = "`environmentService.ts`"
+url = "https://github.com/microsoft/vscode/blob/main/src/vs/platform/environment/common/environmentService.ts"
+
+[[items.docs.sources]]
+label = "cache path list in VS Code source"
+url = "https://github.com/microsoft/vscode/blob/main/.agents/skills/launch/SKILL.md"
+
+[[items]]
+id = "cursor"
+group = "AI coding agents"
+risk = "safe"
+label = "Cursor logs and caches (macOS)"
+action_id = "remove_entries"
+platforms = ["macos"]
+must_close = ["Cursor"]
+roots = [
+  { root = "home", path = "Library/Application Support/Cursor/logs", platforms = ["macos"] },
+  { root = "home", path = "Library/Application Support/Cursor/CachedData", platforms = ["macos"] },
+  { root = "home", path = "Library/Application Support/Cursor/Cache", platforms = ["macos"] },
+  { root = "home", path = "Library/Application Support/Cursor/Code Cache", platforms = ["macos"] },
+  { root = "home", path = "Library/Application Support/Cursor/GPUCache", platforms = ["macos"] },
+  { root = "home", path = "Library/Application Support/Cursor/CachedExtensionVSIXs", platforms = ["macos"] },
+]
+
+[items.docs]
+section = "Editors"
+path = "macOS `$HOME/Library/Application Support/Cursor/logs`, `CachedData`, `Cache`, `Code Cache`, `GPUCache`, `CachedExtensionVSIXs`"
+action = "Remove those cache and log folders only"
+
+source_note = "Cursor forum, staff member deanrie"
+
+[[items.docs.sources]]
+label = "topic 157419, post 40"
+url = "https://forum.cursor.com/t/157419/40"
+
+[[items.docs.sources]]
+label = "topic 164804, post 5"
+url = "https://forum.cursor.com/t/164804/5"
+
+[[items.docs.sources]]
+label = "topic 153436"
+url = "https://forum.cursor.com/t/153436"
+
+[[items]]
+id = "windsurf"
+group = "AI coding agents"
+risk = "safe"
+label = "Windsurf and Devin Desktop logs"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+must_close = ["Windsurf", "Devin Desktop"]
+roots = [
+  { root = "config_home", path = "Windsurf/logs", platforms = ["linux"] },
+  { root = "config_home", path = "Windsurf/crashpad", platforms = ["linux"] },
+  { root = "config_home", path = "Devin/logs", platforms = ["linux"] },
+  { root = "config_home", path = "Devin/crashpad", platforms = ["linux"] },
+  { root = "home", path = "Library/Application Support/Windsurf/logs", platforms = ["macos"] },
+  { root = "home", path = "Library/Application Support/Windsurf/crashpad", platforms = ["macos"] },
+  { root = "home", path = "Library/Application Support/Devin/logs", platforms = ["macos"] },
+  { root = "home", path = "Library/Application Support/Devin/crashpad", platforms = ["macos"] },
+]
+
+[items.docs]
+section = "Editors"
+path = "`Windsurf/{logs,crashpad}` and `Devin/{logs,crashpad}` under `~/Library/Application Support` on macOS or the XDG config root on Linux"
+action = "Remove logs and crash dumps"
+
+[[items.docs.sources]]
+label = "Devin Desktop data paths and migration exclusions"
+url = "https://docs.devin.ai/desktop/devin-desktop-faq#what-local-file-paths-does-the-application-read-from-and-write-to"
+
+[[items.docs.sources]]
+label = "Electron appData"
+url = "https://www.electronjs.org/docs/latest/api/app#appgetpathname"
+
+[[items]]
+id = "puppeteer"
+group = "AI coding agents"
+risk = "caution"
+label = "Puppeteer browser downloads"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "home", path = ".cache/puppeteer/chrome", overrides = ["PUPPETEER_CACHE_DIR"] },
+  { root = "home", path = ".cache/puppeteer/chrome-headless-shell", overrides = ["PUPPETEER_CACHE_DIR"] },
+  { root = "home", path = ".cache/puppeteer/chromium", overrides = ["PUPPETEER_CACHE_DIR"] },
+  { root = "home", path = ".cache/puppeteer/firefox", overrides = ["PUPPETEER_CACHE_DIR"] },
+]
+
+[items.docs]
+section = "Browser and model caches"
+path = "`${PUPPETEER_CACHE_DIR:-$HOME/.cache/puppeteer}/{chrome,chrome-headless-shell,chromium,firefox}`"
+action = "Remove downloaded browser binaries. Reinstall with `npx puppeteer browsers install`"
+
+[[items.docs.sources]]
+label = "Puppeteer configuration"
+url = "https://pptr.dev/guides/configuration"
+
+[[items.docs.sources]]
+label = "`Cache.ts`"
+url = "https://github.com/puppeteer/puppeteer/blob/main/packages/browsers/src/Cache.ts"
+
+# ---------------------------------------------------------------------------
+# Local models (Bash group: "Local models")
+# ---------------------------------------------------------------------------
+
+[[items]]
+id = "hf_hub"
+group = "Local models"
+risk = "caution"
+label = "Hugging Face Hub models"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "cache_home", path = "huggingface/hub", overrides = ["HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_HOME"] },
+]
+
+[items.docs]
+section = "Browser and model caches"
+path = "`HF_HUB_CACHE`, then legacy `HUGGINGFACE_HUB_CACHE`, then `$HF_HOME/hub`, then `${XDG_CACHE_HOME:-$HOME/.cache}/huggingface/hub`"
+action = "Remove model repos under `models--<repo>`. They re-download on next use"
+
+[[items.docs.sources]]
+label = "Hugging Face local cache"
+url = "https://huggingface.co/docs/hub/local-cache"
+
+[[items]]
+id = "ollama"
+group = "Local models"
+risk = "caution"
+label = "Ollama models"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "home", path = ".ollama/models/blobs", overrides = ["OLLAMA_MODELS"] },
+  { root = "home", path = ".ollama/models/manifests", overrides = ["OLLAMA_MODELS"] },
+  { root = "home", path = ".ollama/models/manifests-v2", overrides = ["OLLAMA_MODELS"] },
+]
+
+[items.docs]
+section = "Browser and model caches"
+path = "`${OLLAMA_MODELS:-$HOME/.ollama/models}` with `manifests/`, `manifests-v2/` and `blobs/`. The resolved path must stay inside HOME"
+action = "Remove model manifests and blobs"
+
+[[items.docs.sources]]
+label = "Ollama FAQ"
+url = "https://docs.ollama.com/faq"
+
+[[items.docs.sources]]
+label = "CLI"
+url = "https://docs.ollama.com/cli"
+
+[[items.docs.sources]]
+label = "disk layout source"
+url = "https://github.com/ollama/ollama/blob/main/manifest/paths.go"
+
+[[items]]
+id = "torch_hub"
+group = "Local models"
+risk = "caution"
+label = "PyTorch Hub cache"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "cache_home", path = "torch/hub", overrides = ["TORCH_HOME"] },
+]
+
+[items.docs]
+section = "Browser and model caches"
+path = "`$TORCH_HOME/hub` or `${XDG_CACHE_HOME:-$HOME/.cache}/torch/hub`"
+action = "Remove downloaded repos and checkpoints"
+
+[[items.docs.sources]]
+label = "PyTorch Hub"
+url = "https://pytorch.org/docs/stable/hub.html"
+
+[[items]]
+id = "lm_studio"
+group = "Local models"
+risk = "caution"
+label = "LM Studio GGUF models"
+action_id = "remove_entries"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "home", path = ".lmstudio/models" },
+]
+
+[items.docs]
+section = "Browser and model caches"
+path = "`$HOME/.lmstudio/models/<publisher>/<model>/*.gguf`"
+action = "Remove GGUF model files. Presets and app settings are untouched"
+
+[[items.docs.sources]]
+label = "LM Studio import model"
+url = "https://lmstudio.ai/docs/app/advanced/import-model"
+
+# ---------------------------------------------------------------------------
+# Opt-in stale projects (Bash group: "Projects"; indented `add stale`)
+# ---------------------------------------------------------------------------
+
+[[items]]
+id = "stale"
+group = "Projects"
+risk = "caution"
+label = "Stale project folders"
+action_id = "remove_stale_artifacts"
+platforms = ["linux", "macos"]
+roots = [
+  { root = "stale_project", path = "" },
+]
+
+[items.docs]
+section = "Opt-in stale projects"
+path = "`node_modules`, `.venv`, `venv`, `target`, `.next`, `dist`, `build`, `.turbo`, or `.parcel-cache` under the selected root"
+action = "Remove the listed artifact directories after checking source age again"
+
+[[items.docs.sources]]
+label = "Stale project scanner"
+url = "https://github.com/bankerneel/cleancodeshit/blob/main/cleancodeshit"
+
+# Windows entries describe intended scope, with runtime support pending.
+
+[[windows]]
+id = "npm"
+group = "Package managers"
+risk = "safe"
+label = "npm content cache"
+action_id = "npm_cache_clean"
+status = "planned"
+roots = [{ root = "npm_cache", path = "_cacache", overrides = ["npm_config_cache"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%LOCALAPPDATA%\npm-cache\_cacache. The npm cache setting or npm_config_cache can select another approved root inside the home'
+action = 'Run npm cache clean --force against the verified content cache root'
+sources = [
+  { label = "npm cache", url = "https://docs.npmjs.com/cli/v11/commands/npm-cache" },
+  { label = "npm cache configuration", url = "https://docs.npmjs.com/cli/v11/using-npm/config#cache" },
+]
+
+[[windows]]
+id = "npx"
+group = "Package managers"
+risk = "safe"
+label = "npx downloaded tools"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "npm_cache", path = "_npx", overrides = ["npm_config_cache"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%LOCALAPPDATA%\npm-cache\_npx. The npm cache setting or npm_config_cache can select another approved root inside the home'
+action = 'Remove only the verified _npx downloaded-tool folder'
+sources = [
+  { label = "npm cache", url = "https://docs.npmjs.com/cli/v11/commands/npm-cache" },
+  { label = "npm cache configuration", url = "https://docs.npmjs.com/cli/v11/using-npm/config#cache" },
+]
+
+[[windows]]
+id = "pnpm"
+group = "Package managers"
+risk = "safe"
+label = "pnpm store"
+action_id = "pnpm_store_prune"
+status = "planned"
+roots = [{ root = "pnpm_store", path = "" }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = 'Verified result of pnpm store path. StoreDir can override the Windows store location. No version child is guessed'
+action = 'Run pnpm store prune against the same verified store'
+sources = [
+  { label = "pnpm settings", url = "https://pnpm.io/settings#store-dir" },
+  { label = "pnpm store", url = "https://pnpm.io/cli/store" },
+]
+
+[[windows]]
+id = "yarn"
+group = "Package managers"
+risk = "safe"
+label = "Yarn Classic cache"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "yarn_cache", path = "", overrides = ["YARN_CACHE_FOLDER"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%LOCALAPPDATA%\Yarn\Cache with versioned Classic children. Resolve with yarn cache dir or YARN_CACHE_FOLDER'
+action = 'Clean known Yarn Classic cache children only. Berry project caches are deferred'
+sources = [
+  { label = "Yarn Classic cache", url = "https://classic.yarnpkg.com/lang/en/docs/cli/cache/" },
+  { label = "Classic Windows user directories", url = "https://github.com/yarnpkg/yarn/blob/master/src/util/user-dirs.js" },
+]
+
+[[windows]]
+id = "bun"
+group = "Package managers"
+risk = "safe"
+label = "Bun install cache"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "home", path = ".bun/install/cache", overrides = ["BUN_INSTALL_CACHE_DIR"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%USERPROFILE%\.bun\install\cache. BUN_INSTALL_CACHE_DIR can select another approved root'
+action = 'Remove the verified global install cache only'
+sources = [
+  { label = "Bun global cache", url = "https://bun.com/docs/pm/global-cache" },
+]
+
+[[windows]]
+id = "uv"
+group = "Package managers"
+risk = "safe"
+label = "uv cache"
+action_id = "uv_cache_prune"
+status = "planned"
+roots = [{ root = "local_app_data", path = "uv/cache", overrides = ["UV_CACHE_DIR"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%LOCALAPPDATA%\uv\cache. UV_CACHE_DIR can select another approved root inside the home'
+action = 'Run uv cache prune with the 30-second lock wait, one announced --force retry and the explicit force policy'
+sources = [
+  { label = "uv cache directory", url = "https://docs.astral.sh/uv/concepts/cache/#cache-directory" },
+]
+
+[[windows]]
+id = "pip"
+group = "Package managers"
+risk = "safe"
+label = "pip HTTP and wheel cache"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "local_app_data", path = "pip/Cache", overrides = ["PIP_CACHE_DIR"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%LOCALAPPDATA%\pip\Cache. PIP_CACHE_DIR can select another approved root inside the home'
+action = 'Remove the http, http-v2, wheels and selfcache allowlist only. Installed packages are preserved'
+sources = [
+  { label = "pip caching", url = "https://pip.pypa.io/en/stable/topics/caching/" },
+]
+
+[[windows]]
+id = "brew"
+group = "Package managers"
+risk = "caution"
+label = "Homebrew cache"
+action_id = "unavailable"
+status = "deferred"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = 'No verified Windows root. Homebrew keeps its current macOS and Linux cache roots only'
+action = 'No executable Windows action. Defer until a Windows fixture and authoritative cache path exist. Item compatibility checks pending'
+sources = [
+  { label = "Homebrew environment and cleanup", url = "https://docs.brew.sh/Manpage" },
+]
+
+[[windows]]
+id = "xcode"
+group = "Build and tool caches"
+risk = "safe"
+label = "Xcode DerivedData"
+action_id = "unavailable"
+status = "excluded"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = 'No Windows root. DerivedData is macOS-only'
+action = 'No executable Windows action. Xcode stays macOS-only in the parity gate'
+sources = [
+  { label = "Apple: DerivedData", url = "https://developer.apple.com/documentation/xcode/derived-data" },
+]
+
+[[windows]]
+id = "playwright"
+group = "Build and tool caches"
+risk = "caution"
+label = "Playwright browsers"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "local_app_data", path = "ms-playwright", overrides = ["PLAYWRIGHT_BROWSERS_PATH"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%LOCALAPPDATA%\ms-playwright. PLAYWRIGHT_BROWSERS_PATH can select another approved global root'
+action = 'Remove known downloaded browser revisions under the verified global root only. Project-local installs are outside this item'
+sources = [
+  { label = "Playwright browser locations", url = "https://playwright.dev/docs/browsers#managing-browser-binaries" },
+]
+
+[[windows]]
+id = "electron"
+group = "Build and tool caches"
+risk = "safe"
+label = "Electron download caches"
+action_id = "unavailable"
+status = "deferred"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = 'No verified Windows root for electron or electron-builder downloads'
+action = 'No executable Windows action. Defer until a Windows fixture and an authoritative path are available. Item compatibility checks pending'
+sources = [
+  { label = "Electron environment variables", url = "https://www.electronjs.org/docs/latest/api/environment-variables#electron_cache" },
+  { label = "electron-builder", url = "https://www.electron.build/" },
+]
+
+[[windows]]
+id = "nodegyp"
+group = "Build and tool caches"
+risk = "safe"
+label = "node-gyp headers"
+action_id = "unavailable"
+status = "deferred"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = 'No verified Windows root for downloaded Node headers'
+action = 'No executable Windows action. Defer until a Windows fixture and an authoritative path are available. Item compatibility checks pending'
+sources = [
+  { label = "node-gyp installation", url = "https://github.com/nodejs/node-gyp#installation" },
+  { label = "node-gyp source", url = "https://github.com/nodejs/node-gyp/blob/main/lib/node-gyp.js" },
+]
+
+[[windows]]
+id = "typescript"
+group = "Build and tool caches"
+risk = "safe"
+label = "TypeScript typings cache"
+action_id = "unavailable"
+status = "deferred"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = 'No verified Windows root for automatic type acquisition'
+action = 'No executable Windows action. Defer until a Windows fixture and an authoritative path are available. Item compatibility checks pending'
+sources = [
+  { label = "TypeScript typings cache source", url = "https://github.com/microsoft/TypeScript/blob/v5.9.3/src/tsserver/nodeServer.ts" },
+]
+
+[[windows]]
+id = "go"
+group = "Build and tool caches"
+risk = "safe"
+label = "Go build cache"
+action_id = "go_cache_clean"
+status = "planned"
+roots = [{ root = "go_cache", path = "", overrides = ["GOCACHE"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%LOCALAPPDATA%\go-build. Resolve GOCACHE from the environment or go env GOCACHE'
+action = 'Run go clean -cache against the verified GOCACHE path'
+sources = [
+  { label = "Go build caching", url = "https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching" },
+  { label = "UserCacheDir", url = "https://pkg.go.dev/os#UserCacheDir" },
+]
+
+[[windows]]
+id = "cargo"
+group = "Build and tool caches"
+risk = "safe"
+label = "Cargo registry cache"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "home", path = ".cargo/registry/cache", overrides = ["CARGO_HOME"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%USERPROFILE%\.cargo\registry\cache. CARGO_HOME can relocate the root inside the home'
+action = 'Remove crate archives only. Preserve registry sources, binaries and credentials'
+sources = [
+  { label = "Cargo home", url = "https://doc.rust-lang.org/cargo/guide/cargo-home.html" },
+]
+
+[[windows]]
+id = "cocoapods"
+group = "Build and tool caches"
+risk = "safe"
+label = "CocoaPods cache"
+action_id = "unavailable"
+status = "excluded"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = 'No Windows root. CocoaPods stays macOS-only in the parity gate'
+action = 'No executable Windows action. CocoaPods stays macOS-only'
+sources = [
+  { label = "CocoaPods guide", url = "https://guides.cocoapods.org/using/using-cocoapods.html" },
+  { label = "CocoaPods config source", url = "https://github.com/CocoaPods/CocoaPods/blob/master/lib/cocoapods/config.rb" },
+]
+
+[[windows]]
+id = "gradle"
+group = "Build and tool caches"
+risk = "caution"
+label = "Gradle caches"
+action_id = "remove_entries"
+status = "planned"
+must_close = ["gradle"]
+roots = [{ root = "home", path = ".gradle/caches", overrides = ["GRADLE_USER_HOME"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%USERPROFILE%\.gradle\caches. GRADLE_USER_HOME can relocate the home and caches are appended'
+action = 'Remove allowlisted caches only while no active Gradle process remains. Preserve settings, wrapper installs and project outputs'
+sources = [
+  { label = "Gradle directory layout", url = "https://docs.gradle.org/current/userguide/directory_layout.html" },
+]
+
+[[windows]]
+id = "precommit"
+group = "Build and tool caches"
+risk = "safe"
+label = "pre-commit environments"
+action_id = "unavailable"
+status = "deferred"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = 'No verified Windows root for pre-commit environments or their cache index'
+action = 'No executable Windows action. Defer until a Windows fixture and an authoritative path are available. Item compatibility checks pending'
+sources = [
+  { label = "pre-commit environment variables", url = "https://pre-commit.com/#environment-variables" },
+  { label = "pre-commit store source", url = "https://github.com/pre-commit/pre-commit/blob/main/pre_commit/store.py" },
+]
+
+[[windows]]
+id = "dk_all"
+group = "Docker"
+risk = "danger"
+label = "All Docker containers"
+action_id = "docker_remove_all_containers"
+status = "planned"
+roots = [{ root = "docker_endpoint", path = "" }]
+
+[windows.docs]
+section = "Windows planning group: Docker and WSL disks"
+path = 'Pinned local Docker Desktop named pipe or socket endpoint. Remote and TLS context overrides are removed'
+action = 'Stop and remove the same container set inside the Docker API after danger confirmation'
+sources = [
+  { label = "docker stop", url = "https://docs.docker.com/reference/cli/docker/container/stop/" },
+  { label = "docker rm", url = "https://docs.docker.com/reference/cli/docker/container/rm/" },
+]
+
+[[windows]]
+id = "dk_stopped"
+group = "Docker"
+risk = "danger"
+label = "Stopped Docker containers"
+action_id = "docker_prune_stopped_containers"
+status = "planned"
+roots = [{ root = "docker_endpoint", path = "" }]
+
+[windows.docs]
+section = "Windows planning group: Docker and WSL disks"
+path = 'Pinned local Docker Desktop named pipe or socket endpoint. Remote and TLS context overrides are removed'
+action = 'Prune stopped containers inside the Docker API after danger confirmation'
+sources = [
+  { label = "docker container prune", url = "https://docs.docker.com/reference/cli/docker/container/prune/" },
+]
+
+[[windows]]
+id = "dk_custom"
+group = "Docker"
+risk = "danger"
+label = "Matching Docker images"
+action_id = "docker_remove_matching_images"
+status = "planned"
+roots = [{ root = "docker_endpoint", path = "" }]
+
+[windows.docs]
+section = "Windows planning group: Docker and WSL disks"
+path = 'Pinned local Docker Desktop named pipe or socket endpoint. Patterns come from configuration, not a filesystem path'
+action = 'Remove each configured repository or repository:tag match without force after danger confirmation'
+sources = [
+  { label = "docker image rm", url = "https://docs.docker.com/reference/cli/docker/image/rm/" },
+]
+
+[[windows]]
+id = "dk_images"
+group = "Docker"
+risk = "danger"
+label = "Unused Docker images"
+action_id = "docker_prune_images"
+status = "planned"
+roots = [{ root = "docker_endpoint", path = "" }]
+
+[windows.docs]
+section = "Windows planning group: Docker and WSL disks"
+path = 'Pinned local Docker Desktop named pipe or socket endpoint. Remote and TLS context overrides are removed'
+action = 'Prune unused images inside the Docker API after danger confirmation'
+sources = [
+  { label = "docker image prune", url = "https://docs.docker.com/reference/cli/docker/image/prune/" },
+]
+
+[[windows]]
+id = "dk_build"
+group = "Docker"
+risk = "safe"
+label = "Docker build cache"
+action_id = "docker_prune_build_cache"
+status = "planned"
+roots = [{ root = "docker_endpoint", path = "" }]
+
+[windows.docs]
+section = "Windows planning group: Docker and WSL disks"
+path = 'Pinned local Docker Desktop named pipe or socket endpoint. Remote and TLS context overrides are removed'
+action = 'Prune the builder cache inside the Docker API'
+sources = [
+  { label = "docker builder prune", url = "https://docs.docker.com/reference/cli/docker/builder/prune/" },
+]
+
+[[windows]]
+id = "dk_net"
+group = "Docker"
+risk = "safe"
+label = "Unused Docker networks"
+action_id = "docker_prune_networks"
+status = "planned"
+roots = [{ root = "docker_endpoint", path = "" }]
+
+[windows.docs]
+section = "Windows planning group: Docker and WSL disks"
+path = 'Pinned local Docker Desktop named pipe or socket endpoint. Remote and TLS context overrides are removed'
+action = 'Prune unused custom networks inside the Docker API'
+sources = [
+  { label = "docker network prune", url = "https://docs.docker.com/reference/cli/docker/network/prune/" },
+]
+
+[[windows]]
+id = "dk_volumes"
+group = "Docker"
+risk = "danger"
+label = "Unused Docker volumes"
+action_id = "docker_prune_volumes"
+status = "planned"
+roots = [{ root = "docker_endpoint", path = "" }]
+
+[windows.docs]
+section = "Windows planning group: Docker and WSL disks"
+path = 'Pinned local Docker Desktop named pipe or socket endpoint. Remote and TLS context overrides are removed'
+action = 'Prune unused volumes inside the Docker API after danger confirmation'
+sources = [
+  { label = "docker volume prune", url = "https://docs.docker.com/reference/cli/docker/volume/prune/" },
+  { label = "Docker volumes", url = "https://docs.docker.com/engine/storage/volumes/" },
+]
+
+[[windows]]
+id = "vscode"
+group = "AI coding agents"
+risk = "safe"
+label = "VS Code cache and logs"
+action_id = "remove_entries"
+status = "planned"
+must_close = ["Code"]
+roots = [{ root = "roaming_app_data", path = "Code", overrides = ["VSCODE_APPDATA", "VSCODE_PORTABLE"] }]
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = '%APPDATA%\Code. VSCODE_PORTABLE\user-data, VSCODE_APPDATA or an explicit --user-data-dir can relocate the root inside the home'
+action = 'Remove only the allowlisted cache and log leaves with the editor closed. Preserve User, history and extensions. Validate leaf names on supported Windows builds'
+sources = [
+  { label = "VS Code user data resolution", url = "https://github.com/microsoft/vscode/blob/main/src/vs/platform/environment/node/userDataPath.ts" },
+  { label = "VS Code portable mode", url = "https://code.visualstudio.com/docs/setup/portable" },
+]
+
+[[windows]]
+id = "cursor"
+group = "AI coding agents"
+risk = "safe"
+label = "Cursor cache and logs"
+action_id = "unavailable"
+status = "deferred"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = 'Candidate %APPDATA%\Cursor only. No cleanup-safe children are verified'
+action = 'No executable Windows action. The Electron user data convention gives only a candidate root. Retain the macOS item. Item compatibility checks pending'
+sources = [
+  { label = "Electron user data paths", url = "https://www.electronjs.org/docs/latest/api/app#appgetpathname" },
+]
+
+[[windows]]
+id = "windsurf"
+group = "AI coding agents"
+risk = "safe"
+label = "Windsurf logs and crash dumps"
+action_id = "remove_entries"
+status = "planned"
+must_close = ["Windsurf", "Devin Desktop"]
+roots = [{ root = "roaming_app_data", path = "" }]
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = 'Verify the Windsurf and Devin Desktop profile roots under %APPDATA% before setting relative children'
+action = 'Remove only validated log and crash dump leaves with the editor closed. Defer other state and Chromium caches'
+sources = [
+  { label = "Devin Desktop file paths", url = "https://docs.devin.ai/desktop/devin-desktop-faq#what-local-file-paths-does-the-application-read-from-and-write-to" },
+]
+
+[[windows]]
+id = "visualstudio"
+group = "Editors"
+risk = "caution"
+label = "Visual Studio component caches"
+action_id = "unavailable"
+status = "deferred"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = 'Candidate per-instance state commonly under %LOCALAPPDATA%\Microsoft\VisualStudio'
+action = 'No executable Windows action. Keep component and installer caches out of deletion until Microsoft-supported paths and rebuild behaviour are verified. NuGet caches have their own entries'
+sources = [
+  { label = "Visual Studio performance guidance", url = "https://learn.microsoft.com/en-us/visualstudio/ide/optimize-visual-studio-performance?view=visualstudio" },
+]
+
+[[windows]]
+id = "claude_debug"
+group = "AI coding agents"
+risk = "safe"
+label = "Claude Code debug logs"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "home", path = ".claude/debug", overrides = ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_DEBUG_LOGS_DIR"] }]
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = '%USERPROFILE%\.claude\debug or CLAUDE_CONFIG_DIR. CLAUDE_CODE_DEBUG_LOGS_DIR can point to one in-home debug file'
+action = 'Remove per-session debug files only. Preserve settings, auth, memory and file history'
+sources = [
+  { label = "Claude Code directory", url = "https://code.claude.com/docs/en/claude-directory.md" },
+  { label = "Claude Code environment variables", url = "https://code.claude.com/docs/en/env-vars.md" },
+]
+
+[[windows]]
+id = "claude_history"
+group = "AI coding agents"
+risk = "danger"
+label = "Claude Code session transcripts"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "home", path = ".claude/projects", overrides = ["CLAUDE_CONFIG_DIR"] }]
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = '%USERPROFILE%\.claude\projects\<project>\<session>.jsonl or CLAUDE_CONFIG_DIR'
+action = 'Remove only the narrow session transcript allowlist after typed danger confirmation. Preserve settings, auth, memory and file history'
+sources = [
+  { label = "Claude Code directory", url = "https://code.claude.com/docs/en/claude-directory.md" },
+  { label = "Claude Code environment variables", url = "https://code.claude.com/docs/en/env-vars.md" },
+]
+
+[[windows]]
+id = "codex_logs"
+group = "AI coding agents"
+risk = "safe"
+label = "Codex CLI logs"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "home", path = ".codex/log", overrides = ["CODEX_HOME"] }]
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = '%USERPROFILE%\.codex\log or CODEX_HOME\log'
+action = 'Remove CLI log files only. Preserve auth, SQLite state, memories, skills and config'
+sources = [
+  { label = "Codex environment variables", url = "https://developers.openai.com/codex/config-file/environment-variables/" },
+  { label = "Codex advanced configuration", url = "https://developers.openai.com/codex/config-advanced/" },
+]
+
+[[windows]]
+id = "codex_history"
+group = "AI coding agents"
+risk = "danger"
+label = "Codex rollouts and history"
+action_id = "remove_entries"
+status = "planned"
+roots = [
+  { root = "home", path = ".codex/sessions", overrides = ["CODEX_HOME"] },
+  { root = "home", path = ".codex/archived_sessions", overrides = ["CODEX_HOME"] },
+  { root = "home", path = ".codex/history.jsonl", overrides = ["CODEX_HOME"] },
+]
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = '%USERPROFILE%\.codex\sessions\YYYY\MM\DD, %USERPROFILE%\.codex\archived_sessions and %USERPROFILE%\.codex\history.jsonl, or CODEX_HOME'
+action = 'Remove only the rollout and prompt history allowlist after typed danger confirmation. Preserve auth, SQLite state, memories, skills and config'
+sources = [
+  { label = "Codex environment variables", url = "https://developers.openai.com/codex/config-file/environment-variables/" },
+  { label = "Codex advanced configuration", url = "https://developers.openai.com/codex/config-advanced/" },
+]
+
+[[windows]]
+id = "gemini_history"
+group = "AI coding agents"
+risk = "danger"
+label = "Gemini CLI chats"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "home", path = ".gemini/tmp", overrides = ["GEMINI_CLI_HOME"] }]
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = '%USERPROFILE%\.gemini\tmp\<project>\chats\session-*.json or session-*.jsonl, or GEMINI_CLI_HOME'
+action = 'Remove only supported session files after typed danger confirmation. Preserve settings, credentials and trusted folders'
+sources = [
+  { label = "Gemini CLI storage source", url = "https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/config/storage.ts" },
+]
+
+[[windows]]
+id = "copilot_logs"
+group = "AI coding agents"
+risk = "safe"
+label = "Copilot CLI logs"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "home", path = ".copilot/logs", overrides = ["COPILOT_HOME"] }]
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = '%USERPROFILE%\.copilot\logs or COPILOT_HOME\logs'
+action = 'Remove process and extension logs only. Preserve session state and databases'
+sources = [
+  { label = "Copilot CLI configuration directory", url = "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference" },
+]
+
+[[windows]]
+id = "opencode_logs"
+group = "AI coding agents"
+risk = "safe"
+label = "OpenCode logs"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "data_home", path = "opencode/log" }]
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = '%USERPROFILE%\.local\share\opencode\log under the approved home. Validate the Windows root before enabling'
+action = 'Remove log files only after review. Preserve opencode.db, auth, config and state'
+sources = [
+  { label = "OpenCode troubleshooting", url = "https://opencode.ai/docs/troubleshooting/" },
+]
+
+[[windows]]
+id = "puppeteer"
+group = "AI coding agents"
+risk = "caution"
+label = "Puppeteer browser downloads"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "home", path = ".cache/puppeteer", overrides = ["PUPPETEER_CACHE_DIR"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%USERPROFILE%\.cache\puppeteer. PUPPETEER_CACHE_DIR can select another approved root'
+action = 'Remove only the known chrome, chrome-headless-shell, chromium and firefox download families'
+sources = [
+  { label = "Puppeteer configuration", url = "https://pptr.dev/guides/configuration" },
+  { label = "Puppeteer browser cache source", url = "https://github.com/puppeteer/puppeteer/blob/main/packages/browsers/src/Cache.ts" },
+]
+
+[[windows]]
+id = "hf_hub"
+group = "Local models"
+risk = "caution"
+label = "Hugging Face model cache"
+action_id = "remove_entries"
+status = "planned"
+roots = [{ root = "home", path = ".cache/huggingface/hub", overrides = ["HF_HUB_CACHE", "HF_HOME"] }]
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = '%USERPROFILE%\.cache\huggingface\hub. Honor HF_HUB_CACHE, then HF_HOME, in the current precedence order'
+action = 'Match model repositories only. Preserve datasets and tokens. Report copies and links from actual file metadata'
+sources = [
+  { label = "Hugging Face cache", url = "https://huggingface.co/docs/hub/local-cache" },
+  { label = "Hub environment variables", url = "https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables" },
+]
+
+[[windows]]
+id = "ollama"
+group = "Local models"
+risk = "caution"
+label = "Ollama models"
+action_id = "remove_entries"
+status = "planned"
+must_close = ["ollama"]
+roots = [{ root = "home", path = ".ollama/models", overrides = ["OLLAMA_MODELS"] }]
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = '%USERPROFILE%\.ollama\models. OLLAMA_MODELS can select another approved root inside the home'
+action = 'Audit through Ollama read-only model listing and preserve the manifests and blobs allowlist. Block while Ollama is running'
+sources = [
+  { label = "Ollama model locations", url = "https://docs.ollama.com/faq#where-are-models-stored" },
+]
+
+[[windows]]
+id = "torch_hub"
+group = "Local models"
+risk = "caution"
+label = "PyTorch Hub cache"
+action_id = "unavailable"
+status = "deferred"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = 'No verified Windows root for downloaded PyTorch Hub repos or checkpoints'
+action = 'No executable Windows action. Defer until a Windows fixture and an authoritative path are available. Item compatibility checks pending'
+sources = [
+  { label = "PyTorch Hub", url = "https://pytorch.org/docs/stable/hub.html" },
+]
+
+[[windows]]
+id = "lm_studio"
+group = "Local models"
+risk = "caution"
+label = "LM Studio models"
+action_id = "unavailable"
+status = "deferred"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = 'No verified Windows root for LM Studio GGUF model files'
+action = 'No executable Windows action. Defer until a Windows fixture and an authoritative path are available. Item compatibility checks pending'
+sources = [
+  { label = "LM Studio import model", url = "https://lmstudio.ai/docs/app/advanced/import-model" },
+]
+
+[[windows]]
+id = "stale"
+group = "Projects"
+risk = "caution"
+label = "Stale project artifacts"
+action_id = "remove_stale_artifacts"
+status = "planned"
+roots = [
+  { root = "stale_project", path = "node_modules" },
+  { root = "stale_project", path = ".venv" },
+  { root = "stale_project", path = "venv" },
+  { root = "stale_project", path = "target" },
+  { root = "stale_project", path = ".next" },
+  { root = "stale_project", path = "dist" },
+  { root = "stale_project", path = "build" },
+  { root = "stale_project", path = ".turbo" },
+  { root = "stale_project", path = ".parcel-cache" },
+]
+
+[windows.docs]
+section = "Windows planning group: stale projects"
+path = 'Artifact names under an explicit --in directory that resolves strictly inside the approved home'
+action = 'Remove listed artifact directories after rechecking source age and explicit selection. Preserve Git tracked files and nested repository boundaries'
+sources = [
+  { label = "Stale project scanner", url = "https://github.com/bankerneel/cleancodeshit/blob/main/cleancodeshit" },
+]
+
+[[windows]]
+id = "nuget_http"
+group = "Package managers"
+risk = "safe"
+label = "NuGet HTTP cache"
+action_id = "nuget_clear_http_cache"
+status = "planned"
+roots = [{ root = "nuget_cache", path = "v3-cache", overrides = ["NUGET_HTTP_CACHE_PATH"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%LOCALAPPDATA%\NuGet\v3-cache. Verify with dotnet nuget locals all --list. NUGET_HTTP_CACHE_PATH can override the root'
+action = 'Clear this named cache independently while no active restore is running'
+sources = [
+  { label = "NuGet cache locations", url = "https://learn.microsoft.com/en-us/nuget/consume-packages/managing-the-global-packages-and-cache-folders" },
+]
+
+[[windows]]
+id = "nuget_plugins"
+group = "Package managers"
+risk = "safe"
+label = "NuGet plugins cache"
+action_id = "nuget_clear_plugins_cache"
+status = "planned"
+roots = [{ root = "nuget_cache", path = "plugins-cache", overrides = ["NUGET_PLUGINS_CACHE_PATH"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%LOCALAPPDATA%\NuGet\plugins-cache. Verify with dotnet nuget locals all --list. NUGET_PLUGINS_CACHE_PATH can override the root'
+action = 'Clear this named cache independently while no active restore is running'
+sources = [
+  { label = "NuGet cache locations", url = "https://learn.microsoft.com/en-us/nuget/consume-packages/managing-the-global-packages-and-cache-folders" },
+]
+
+[[windows]]
+id = "nuget_temp"
+group = "Package managers"
+risk = "safe"
+label = "NuGet scratch files"
+action_id = "nuget_clear_temp"
+status = "planned"
+roots = [{ root = "temp", path = "NuGetScratch", overrides = ["NUGET_SCRATCH"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%TEMP%\NuGetScratch. Verify with dotnet nuget locals all --list. NUGET_SCRATCH can override the root inside the home'
+action = 'Clear this named cache independently while no active restore is running'
+sources = [
+  { label = "NuGet cache locations", url = "https://learn.microsoft.com/en-us/nuget/consume-packages/managing-the-global-packages-and-cache-folders" },
+]
+
+[[windows]]
+id = "nuget_global_packages"
+group = "Package managers"
+risk = "safe"
+label = "NuGet global packages folder"
+action_id = "inventory_only"
+status = "inventory_only"
+roots = [{ root = "home", path = ".nuget/packages", overrides = ["NUGET_PACKAGES"] }]
+
+[windows.docs]
+section = "Windows planning group: package, build and browser caches"
+path = '%USERPROFILE%\.nuget\packages or NUGET_PACKAGES. Inventory only'
+action = 'Inventory the global packages folder only. No deletion action'
+sources = [
+  { label = "NuGet cache locations", url = "https://learn.microsoft.com/en-us/nuget/consume-packages/managing-the-global-packages-and-cache-folders" },
+]
+
+[[windows]]
+id = "docker_wsl_disks"
+group = "System storage"
+risk = "danger"
+label = "Docker Desktop WSL disks"
+action_id = "unavailable"
+status = "excluded"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: Docker and WSL disks"
+path = 'Docker Desktop commonly uses %LOCALAPPDATA%\Docker\wsl. VHDX files are excluded'
+action = 'No executable Windows action. Hard exclusion from filesystem sizing and deletion. No compaction or distribution removal. Keep Docker object actions inside the Docker API'
+sources = [
+  { label = "Docker Desktop WSL backend", url = "https://docs.docker.com/desktop/features/wsl/" },
+  { label = "Microsoft WSL disk guidance", url = "https://learn.microsoft.com/en-us/windows/wsl/disk-space" },
+]
+
+[[windows]]
+id = "wsl_disks"
+group = "System storage"
+risk = "danger"
+label = "WSL distro disks"
+action_id = "unavailable"
+status = "excluded"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: Docker and WSL disks"
+path = 'WSL distro locations are per distribution and may differ from Store defaults. No verified common root'
+action = 'No executable Windows action. Hard exclusion from filesystem sizing and deletion. No compaction or distribution removal'
+sources = [
+  { label = "Microsoft WSL disk guidance", url = "https://learn.microsoft.com/en-us/windows/wsl/disk-space" },
+]
+
+[[windows]]
+id = "windows_temp_areas"
+group = "System storage"
+risk = "caution"
+label = "Windows temporary areas"
+action_id = "unavailable"
+status = "excluded"
+roots = []
+
+[windows.docs]
+section = "Windows planning group: editors, agents, models and system storage"
+path = '%TEMP% may be redirected; %LOCALAPPDATA%\Temp and the Internet cache are inventory areas only. Browser cache, Downloads, Recycle Bin and system cleanup are outside the catalog'
+action = 'No executable Windows action. Only specific supported leaves such as NuGetScratch ship as items. Use Storage Sense for system-managed cleanup'
+sources = [
+  { label = "Windows Storage Sense", url = "https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-storage" },
+]
