@@ -2,11 +2,13 @@
 
 All notable changes to Clean Code Shit are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project does not use semantic versioning for its release names.
 
-## [Unreleased]
+## [1.2.0] - 2026-11-28
 
 ### Changed
 
 - The terminal banner, risk badges, bars, prompts, and cleanup totals use the website palette in truecolor, 256-colour, and basic ANSI terminals. `NO_COLOR` and `--no-color` produce plain output.
+- Plain output (`NO_COLOR` or `--no-color`) no longer draws the scanning spinner or progress line.
+- CI downloads the pinned ShellCheck release directly and verifies its checksum.
 
 ## [1.1.0] - 2026-11-27
 
