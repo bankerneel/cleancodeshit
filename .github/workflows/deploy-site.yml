@@ -5,12 +5,16 @@ on:
     paths:
       - 'site/**'
       - 'tests/check-site.mjs'
+      - 'scripts/site-version.mjs'
+      - 'tools/chrome.mjs'
       - 'cleancodeshit'
       - '.github/workflows/deploy-site.yml'
   pull_request:
     paths:
       - 'site/**'
       - 'tests/check-site.mjs'
+      - 'scripts/site-version.mjs'
+      - 'tools/chrome.mjs'
       - 'cleancodeshit'
       - '.github/workflows/deploy-site.yml'
 
