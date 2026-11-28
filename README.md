@@ -72,6 +72,7 @@ cleancodeshit --list                   # audit only, changes nothing
 cleancodeshit --dry-run --select safe  # preview selected items
 cleancodeshit --select "npm uv dk_build"
 cleancodeshit --select safe --yes      # unattended, safe items only
+cleancodeshit --select uv --force-uv   # start uv pruning without waiting for its lock
 cleancodeshit --in ~/Projects --older-than 45
 ```
 
@@ -80,6 +81,10 @@ Pick items by number, range (`5-7`), name (`npm,uv,dk_build`), or preset. Separa
 `--in DIR` adds stale project folders under `DIR` to the audit. Choose a directory inside your home. For Git projects, start at the repository root or higher so tracked files can be checked. `--older-than DAYS` sets the inactivity threshold, 30 days by default. Select `stale` to include the listed dependency, build and cache folders in a plan.
 
 For scripts and cron, use `--select ITEMS --yes`. `--yes` skips prompts but refuses danger items, so a typo cannot wipe a volume without a human present. Without a terminal, `--select` is required.
+
+The uv cleanup gives `uv cache prune` 30 seconds to finish. Set `CLEANCODESHIT_UV_LOCK_TIMEOUT` to a positive number of whole seconds to change the limit. If the first attempt times out, Clean Code Shit stops it and announces one retry with `--force`. Use `--force-uv` or `CLEANCODESHIT_UV_FORCE=1` to start with force.
+
+Forced pruning targets unused entries. It bypasses uv's in-use check and can disturb a running uv process. uv 0.8.24 added this option. Older versions can prune normally when the cache is free. If they time out, close other uv processes or update uv. [uv cache prune](https://docs.astral.sh/uv/reference/cli/#uv-cache-prune--force) · [uv 0.8.24 release](https://github.com/astral-sh/uv/releases/tag/0.8.24)
 
 Other flags: `--no-color` (also `NO_COLOR=1`), `--ascii` (also `CLEANCODESHIT_ASCII=1`), `-h` / `--help`, and `-V` / `--version`.
 

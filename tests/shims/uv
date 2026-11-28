@@ -2,4 +2,25 @@
 # shellcheck source=_log.sh
 . "$(dirname -- "$0")/_log.sh"
 ccs_shim_log uv "$@"
-exit 0
+if [ "$*" = "cache prune --help" ]; then
+  printf 'Usage: uv cache prune [OPTIONS]\n'
+  if [ "${CCS_UV_NO_FORCE:-0}" != 1 ]; then
+    printf '      --force  Force removal of the cache, ignoring in-use checks\n'
+  fi
+  exit 0
+fi
+
+if [ "${4:-}" != prune ]; then exit 2; fi
+if [ "${5:-}" = --force ]; then
+  [ "${CCS_UV_NO_FORCE:-0}" != 1 ] || exit 2
+  exit 0
+fi
+while [ -n "${CCS_UV_LOCK:-}" ] && [ -e "$CCS_UV_LOCK" ]; do
+  sleep 30 &
+  sleeper=$!
+  if [ -n "${CCS_INTERRUPT_PIDS:-}" ]; then
+    printf '%s %s\n' "$$" "$sleeper" >"$CCS_INTERRUPT_PIDS"
+  fi
+  wait "$sleeper" || exit $?
+done
+exit "${CCS_UV_PRUNE_STATUS:-0}"

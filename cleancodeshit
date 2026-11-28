@@ -34,6 +34,8 @@ STALE_ROOT=""
 STALE_REQUESTED=0
 STALE_DAYS=30
 STALE_DAYS_SET=0
+UV_FORCE="${CLEANCODESHIT_UV_FORCE:-0}"
+UV_LOCK_TIMEOUT="${CLEANCODESHIT_UV_LOCK_TIMEOUT:-30}"
 
 usage() {
   cat <<EOF
@@ -59,6 +61,7 @@ Options:
       --in DIR      include stale project folders under DIR in your home
       --older-than DAYS
                     project inactivity threshold (default: 30 days)
+      --force-uv    skip waiting for uv's cache lock (also CLEANCODESHIT_UV_FORCE=1)
       --no-color    plain output (also honoured: NO_COLOR=1)
       --ascii       ASCII symbols only
   -h, --help        this help
@@ -68,6 +71,10 @@ Risk levels:
   safe     a cache the tool rebuilds or re-downloads on demand
   caution  re-download is slow or large, or it removes old versions
   danger   can lose data; needs "yes" typed in full, never in a preset
+
+uv cache prune waits up to CLEANCODESHIT_UV_LOCK_TIMEOUT whole seconds
+(default: 30), then tries --force once if supported. Force can disturb a
+running uv process because it bypasses the in-use check.
 EOF
 }
 
@@ -88,6 +95,7 @@ while [ $# -gt 0 ]; do
       shift ;;
     --in=*) STALE_ROOT="${1#*=}"; STALE_REQUESTED=1 ;;
     --older-than=*) STALE_DAYS="${1#*=}"; STALE_DAYS_SET=1 ;;
+    --force-uv) UV_FORCE=1 ;;
     --no-color) USE_COLOR=0 ;;
     --ascii) ASCII_ONLY=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -578,7 +586,12 @@ add npx        "Package managers"      safe    "npx downloaded tools"           
 add pnpm       "Package managers"      safe    "pnpm store (packages no project uses)"  "pnpm store prune"
 add yarn       "Package managers"      safe    "Yarn cache"                             "remove versioned Yarn cache directories"
 add bun        "Package managers"      safe    "bun install cache"                      "remove ~/.bun/install/cache"
-add uv         "Package managers"      safe    "uv cache (unused entries)"              "uv cache prune"
+if [ "$UV_FORCE" = 1 ]; then
+  UV_PLAN="uv cache prune --force (may disturb a running uv process)"
+else
+  UV_PLAN="uv cache prune (may retry with --force after the lock wait limit and disturb a running uv process)"
+fi
+add uv         "Package managers"      safe    "uv cache (unused entries)"              "$UV_PLAN"
 add pip        "Package managers"      safe    "pip download cache"                     "remove the pip cache folder (installed packages untouched)"
 add brew       "Package managers"      caution "Homebrew downloads and old versions"    "brew cleanup --prune=all"
 add xcode      "Build and tool caches" safe    "Xcode DerivedData"                      "remove DerivedData (Xcode rebuilds it)"
@@ -689,7 +702,7 @@ clean_pnpm() {
 }
 clean_yarn()       { clean_targets; }
 clean_bun()        { safe_rm "$HOME/.bun/install/cache"; }
-clean_uv()         { run_in_home_cache "$UV_CACHE" uv --cache-dir "$UV_CACHE" cache prune; }
+clean_uv()         { run_in_home_cache "$UV_CACHE" uv --cache-dir "$UV_CACHE" cache prune "$@"; }
 clean_pip()        { clean_targets; }
 clean_brew()       { HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_CACHE="$BREW_CACHE" run_in_home_cache "$BREW_CACHE" brew cleanup --prune=all; }
 clean_xcode()      { safe_rm "$HOME/Library/Developer/Xcode/DerivedData"; }
@@ -1657,16 +1670,19 @@ confirm() {
 
 CURRENT_PID=""
 LOG=""
+UV_FORCE_RESULT=""
+
+# Monitor mode puts each attempt and its descendants in a separate process group.
+stop_attempt() {
+  kill -TERM -- "-$CURRENT_PID" 2>/dev/null || :
+  sleep 0.2
+  kill -KILL -- "-$CURRENT_PID" 2>/dev/null || :
+  wait "$CURRENT_PID" 2>/dev/null || :
+}
 
 on_interrupt() {
   trap '' INT TERM
-  if [ -n "$CURRENT_PID" ]; then
-    # Monitor mode gives this step and its children a separate process group.
-    kill -TERM -- "-$CURRENT_PID" 2>/dev/null || :
-    sleep 0.2
-    kill -KILL -- "-$CURRENT_PID" 2>/dev/null || :
-    wait "$CURRENT_PID" 2>/dev/null || :
-  fi
+  [ -z "$CURRENT_PID" ] || stop_attempt
   [ -n "$C_RESET" ] && { tput cnorm 2>/dev/null; printf '\r\033[K'; }
   echo
   warn "Interrupted. Items already cleaned stay cleaned."
@@ -1705,11 +1721,13 @@ start_log() {
   return 0
 }
 
-run_item() {
-  local i="$1" label start rc frame=0
+run_item_attempt() {
+  local i="$1" start="$2" limit="$3" label rc frame=0
+  shift 3
   label="${LABEL[i]}"
-  start=$(date +%s)
-  printf '\n===== %s (%s) =====\n' "$label" "${IDS[i]}" >>"$LOG"
+  ATTEMPT_TIMED_OUT=0
+  # A local declaration would shadow Bash's elapsed-time counter.
+  SECONDS=0
   INTERRUPT_PENDING=0
   trap 'INTERRUPT_PENDING=1' INT TERM
   (
@@ -1719,23 +1737,89 @@ run_item() {
       fail "The selected Docker endpoint changed. Skipping cleanup."
       exit 1
     fi
-    "clean_${IDS[i]}"
+    "$@"
   ) >>"$LOG" 2>&1 &
   CURRENT_PID=$!
   trap on_interrupt INT TERM
   [ "$INTERRUPT_PENDING" = 0 ] || on_interrupt
-  if [ -n "$C_RESET" ]; then
-    tput civis 2>/dev/null
+  [ -z "$C_RESET" ] || tput civis 2>/dev/null
+  if [ -n "$C_RESET" ] || [ "$limit" -gt 0 ]; then
     while kill -0 "$CURRENT_PID" 2>/dev/null; do
-      printf '\r\033[K   %s%s%s %s %s(%ss)%s' "$C_YELLOW" "${FRAMES[frame]}" "$C_RESET" "$label" "$C_DIM" "$(( $(date +%s) - start ))" "$C_RESET"
-      frame=$(( (frame + 1) % ${#FRAMES[@]} ))
+      if [ "$limit" -gt 0 ] && [ "$SECONDS" -ge "$limit" ]; then
+        ATTEMPT_TIMED_OUT=1
+        stop_attempt
+        break
+      fi
+      if [ -n "$C_RESET" ]; then
+        printf '\r\033[K   %s%s%s %s %s(%ss)%s' "$C_YELLOW" "${FRAMES[frame]}" "$C_RESET" "$label" "$C_DIM" "$(( $(date +%s) - start ))" "$C_RESET"
+        frame=$(( (frame + 1) % ${#FRAMES[@]} ))
+      fi
       sleep 0.1
     done
+  fi
+  if [ -n "$C_RESET" ]; then
     printf '\r\033[K'
     tput cnorm 2>/dev/null
   fi
-  wait "$CURRENT_PID"; rc=$?
+  if [ "$ATTEMPT_TIMED_OUT" = 1 ]; then
+    rc=124
+  else
+    wait "$CURRENT_PID"; rc=$?
+  fi
   CURRENT_PID=""
+  return "$rc"
+}
+
+uv_force_supported() {
+  local help
+  help=$(LC_ALL=C uv cache prune --help 2>&1) || return 1
+  grep -Eq '^[[:space:]]*(-[[:alnum:]], +)?--force([[:space:],=]|$)' <<<"$help"
+}
+
+uv_message() {
+  warn "$*"
+  printf '%s\n' "$*" >>"$LOG"
+}
+
+run_uv_item() {
+  local i="$1" start="$2" rc
+  if [[ "$UV_LOCK_TIMEOUT" = *[!0-9]* ]] || ! [ "$UV_LOCK_TIMEOUT" -gt 0 ] 2>/dev/null; then
+    uv_message "CLEANCODESHIT_UV_LOCK_TIMEOUT must be a positive number of whole seconds."
+    return 1
+  fi
+  if [ "$UV_FORCE" != 1 ]; then
+    run_item_attempt "$i" "$start" "$UV_LOCK_TIMEOUT" clean_uv
+    rc=$?
+    [ "$ATTEMPT_TIMED_OUT" = 1 ] || return "$rc"
+    uv_message "uv cache prune did not finish within the $UV_LOCK_TIMEOUT-second lock wait limit."
+  fi
+
+  if ! run_item_attempt "$i" "$start" "$UV_LOCK_TIMEOUT" uv_force_supported; then
+    uv_message "uv cache prune --force is unavailable. Close other uv processes, or update uv, then run again."
+    return 1
+  fi
+  if [ "$UV_FORCE" = 1 ]; then
+    uv_message "Using uv cache prune --force from the start."
+    UV_FORCE_RESULT="uv: started with uv cache prune --force."
+  else
+    uv_message "Retrying once with uv cache prune --force."
+    UV_FORCE_RESULT="uv: retried with uv cache prune --force after the lock wait limit."
+  fi
+  uv_message "Force skips the in-use check and can disturb a running uv process."
+  printf '%s\n' "$UV_FORCE_RESULT" >>"$LOG"
+  run_item_attempt "$i" "$start" 0 clean_uv --force
+}
+
+run_item() {
+  local i="$1" label start rc
+  label="${LABEL[i]}"
+  start=$(date +%s)
+  printf '\n===== %s (%s) =====\n' "$label" "${IDS[i]}" >>"$LOG"
+  if [ "${IDS[i]}" = uv ]; then
+    run_uv_item "$i" "$start"; rc=$?
+  else
+    run_item_attempt "$i" "$start" 0 "clean_${IDS[i]}"; rc=$?
+  fi
   RC[i]=$rc; DUR[i]=$(( $(date +%s) - start ))
   echo "exit $rc after ${DUR[i]}s" >>"$LOG"
   if [ "$rc" -eq 0 ]; then
@@ -1750,7 +1834,7 @@ run_item() {
 # ----------------------------------------------------------------------------
 
 report() {
-  local i before after freed total=0 failed=0 status
+  local i before after freed total=0 failed=0 status label
   section "Result"
   printf '   %s%-44s %10s %10s %10s%s\n' "$C_DIM" "" "before" "after" "freed" "$C_RESET"
   for i in "${SELECTED[@]}"; do
@@ -1761,10 +1845,12 @@ report() {
     if [ "$before" -gt 0 ] && [ "$before" -gt "$after" ]; then freed=$((before - after)); fi
     total=$((total + freed))
     if [ "${RC[i]}" -eq 0 ]; then status="$C_PORCELAIN$G_OK$C_RESET"; else status="$C_RED$G_FAIL$C_RESET"; failed=$((failed + 1)); fi
+    label="${LABEL[i]}"
+    if [ "${IDS[i]}" = uv ] && [ -n "$UV_FORCE_RESULT" ]; then label="$label [--force]"; fi
     if [ "$before" -lt 0 ]; then
-      printf '   %s %-42s %10s %10s %10s\n' "$status" "${LABEL[i]}" "-" "-" "-"
+      printf '   %s %-42s %10s %10s %10s\n' "$status" "$label" "-" "-" "-"
     else
-      printf '   %s %-42s %10s %10s %s%10s%s\n' "$status" "${LABEL[i]}" "$(human "$before")" "$(human "$after")" "$C_BOLD$C_YELLOW" "$(human "$freed")" "$C_RESET"
+      printf '   %s %-42s %10s %10s %s%10s%s\n' "$status" "$label" "$(human "$before")" "$(human "$after")" "$C_BOLD$C_YELLOW" "$(human "$freed")" "$C_RESET"
     fi
   done
   echo
@@ -1772,6 +1858,7 @@ report() {
     "$C_BOLD$C_YELLOW" "$C_RESET" "$C_BOLD$C_YELLOW" "$(human "$total")" "$C_RESET" \
     "$C_BOLD" "$C_RESET" "$(human "$DISK_BEFORE")" "$C_YELLOW$G_ARROW$C_RESET" "$(human "$(disk_free_bytes)")")"
   [ "$failed" -gt 0 ] && warn "$failed item(s) failed. Details are in the log."
+  [ -z "$UV_FORCE_RESULT" ] || note "$UV_FORCE_RESULT"
   note "Log: $LOG"
   echo "freed $(human "$total"); disk free after: $(human "$(disk_free_bytes)")" >>"$LOG"
   [ "$failed" -eq 0 ]

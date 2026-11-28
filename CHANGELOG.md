@@ -2,6 +2,16 @@
 
 All notable changes to Clean Code Shit are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project does not use semantic versioning for its release names.
 
+## [Unreleased]
+
+### Fixed
+
+- Bound the initial uv prune attempt to 30 seconds by default. Announce a single forced retry when uv supports it, or fail the uv item and continue cleanup when it does not.
+
+### Added
+
+- `--force-uv` and `CLEANCODESHIT_UV_FORCE=1` to start uv pruning with force, and `CLEANCODESHIT_UV_LOCK_TIMEOUT` to adjust the wait limit. Forced attempts are marked in the result and log.
+
 ## [1.2.0] - 2026-11-28
 
 ### Changed
