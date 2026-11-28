@@ -9,12 +9,12 @@ use std::ptr::{null, null_mut};
 
 use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows_sys::Wdk::Storage::FileSystem::{
-    FILE_OPEN, FILE_OPEN_NO_RECALL, FILE_OPEN_REPARSE_POINT, FILE_STAT_INFORMATION,
-    FILE_SYNCHRONOUS_IO_NONALERT, FileStatInformation, NtCreateFile, NtQueryInformationByName,
+    FILE_OPEN, FILE_OPEN_NO_RECALL, FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT,
+    FileIdExtdDirectoryInformation, NtCreateFile, NtQueryDirectoryFileEx,
 };
 use windows_sys::Win32::Foundation::{
-    ERROR_NO_MORE_FILES, ERROR_NO_TOKEN, HANDLE, INVALID_HANDLE_VALUE, RtlNtStatusToDosError,
-    STATUS_REPARSE_POINT_ENCOUNTERED, UNICODE_STRING,
+    ERROR_NO_TOKEN, HANDLE, INVALID_HANDLE_VALUE, RtlNtStatusToDosError, STATUS_NO_MORE_FILES,
+    STATUS_NO_SUCH_FILE, STATUS_REPARSE_POINT_ENCOUNTERED, UNICODE_STRING,
 };
 use windows_sys::Win32::Security::{
     CheckTokenMembership, CreateWellKnownSid, GetTokenInformation, IsWellKnownSid,
@@ -31,10 +31,13 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::System::WindowsProgramming::{DRIVE_FIXED, DRIVE_REMOVABLE};
 use windows_sys::Win32::UI::Shell::{FOLDERID_Profile, SHGetKnownFolderPath};
 
-use super::{FileIdentity, FsError, Result, is_unsafe_attributes};
+use super::{FileIdentity, FsError, Result};
 
 const OBJ_CASE_INSENSITIVE: u32 = 0x40;
 const OBJ_DONT_REPARSE: u32 = 0x1000;
+const SL_RESTART_SCAN: u32 = 0x01;
+const SL_RETURN_ON_DISK_ENTRIES_ONLY: u32 = 0x08;
+const SL_NO_CURSOR_UPDATE_QUERY: u32 = 0x10;
 
 pub(super) fn standard_user() -> Result<()> {
     let mut token = null_mut();
@@ -162,7 +165,7 @@ pub(super) fn volume_root(letter: u8) -> Result<OwnedHandle> {
     let handle = owned(unsafe {
         CreateFileW(
             root.as_ptr(),
-            FILE_TRAVERSE | FILE_READ_ATTRIBUTES,
+            FILE_TRAVERSE | FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             null(),
             OPEN_EXISTING,
@@ -223,24 +226,13 @@ pub(super) fn volume_root(letter: u8) -> Result<OwnedHandle> {
 
 #[derive(Clone, Copy)]
 pub(super) enum Open {
-    Traverse,
     Directory,
     Inspect,
     Delete,
 }
 
-pub(super) fn open_child(
-    parent: &OwnedHandle,
-    name: &mut [u16],
-    usage: Open,
-) -> Result<OwnedHandle> {
-    // Names have already been validated as a single component of <=255 units.
-    let length = size_of_val(name) as u16;
-    let name = UNICODE_STRING {
-        Length: length,
-        MaximumLength: length,
-        Buffer: name.as_mut_ptr(),
-    };
+pub(super) fn open_child(parent: &OwnedHandle, name: &[u16], usage: Open) -> Result<OwnedHandle> {
+    let name = unicode_string(name);
     let attributes = OBJECT_ATTRIBUTES {
         Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
         RootDirectory: parent.as_raw_handle(),
@@ -248,28 +240,7 @@ pub(super) fn open_child(
         Attributes: OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
         ..Default::default()
     };
-    // Query the attributes without opening the file. Enumeration also filters
-    // them before reaching this point. The open still uses no recall and no
-    // reparse flags and its actual handle is checked again after opening.
-    let mut stat = FILE_STAT_INFORMATION::default();
-    let mut status_block = IO_STATUS_BLOCK::default();
-    // SAFETY: FileStatInformation specifies the live and writable stat type.
-    // The parent, validated relative name and object attributes remain live.
-    let status = unsafe {
-        NtQueryInformationByName(
-            &attributes,
-            &mut status_block,
-            (&mut stat as *mut FILE_STAT_INFORMATION).cast(),
-            size_of_val(&stat) as u32,
-            FileStatInformation,
-        )
-    };
-    check_status(status)?;
-    if is_unsafe_attributes(stat.FileAttributes) {
-        return Err(FsError::UnsafeEntry);
-    }
     let (access, sharing) = match usage {
-        Open::Traverse => (FILE_TRAVERSE, FILE_SHARE_READ | FILE_SHARE_WRITE),
         Open::Directory => (
             FILE_TRAVERSE | FILE_LIST_DIRECTORY,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -278,6 +249,7 @@ pub(super) fn open_child(
         Open::Delete => (DELETE, FILE_SHARE_READ),
     };
     let mut result = null_mut();
+    let mut status_block = IO_STATUS_BLOCK::default();
     // SAFETY: All pointers describe live inputs/outputs with the ABI layout
     // from windows-sys. The parent and name stay live for this synchronous
     // existing-file open. The object name is relative and reparsing is denied.
@@ -375,36 +347,71 @@ pub(super) const ID: usize = offset_of!(FILE_ID_EXTD_DIR_INFO, FileId);
 pub(super) const NAME: usize = offset_of!(FILE_ID_EXTD_DIR_INFO, FileName);
 
 #[repr(align(8))]
-pub(super) struct DirectoryBuffer(pub [u8; 32 * 1024]);
+pub(super) struct DirectoryBuffer<const N: usize>(pub [u8; N]);
 
 pub(super) fn enumerate(
     handle: &OwnedHandle,
-    buffer: &mut DirectoryBuffer,
+    buffer: &mut DirectoryBuffer<{ 32 * 1024 }>,
     restart: bool,
-) -> Result<bool> {
-    let class = if restart {
-        FileIdExtdDirectoryRestartInfo
-    } else {
-        FileIdExtdDirectoryInfo
-    };
+) -> Result<Option<usize>> {
+    let flags = if restart { SL_RESTART_SCAN } else { 0 };
+    query_directory(handle, buffer, flags, None)
+}
+
+pub(super) fn lookup(
+    handle: &OwnedHandle,
+    buffer: &mut DirectoryBuffer<1024>,
+    name: &[u16],
+) -> Result<Option<usize>> {
+    let name = unicode_string(name);
+    query_directory(handle, buffer, SL_NO_CURSOR_UPDATE_QUERY, Some(&name))
+}
+
+fn query_directory<const N: usize>(
+    handle: &OwnedHandle,
+    buffer: &mut DirectoryBuffer<N>,
+    flags: u32,
+    name: Option<&UNICODE_STRING>,
+) -> Result<Option<usize>> {
+    let mut status_block = IO_STATUS_BLOCK::default();
     // SAFETY: The live, mutable buffer has the alignment of the requested
-    // record and the supplied length does not exceed its capacity.
-    if unsafe {
-        GetFileInformationByHandleEx(
+    // record and the supplied length does not exceed its capacity. All
+    // directory handles are synchronous, so no output can outlive this call.
+    // A name, when supplied, points into a live validated UTF-16 component.
+    let status = unsafe {
+        NtQueryDirectoryFileEx(
             handle.as_raw_handle(),
-            class,
+            null_mut(),
+            None,
+            null(),
+            &mut status_block,
             buffer.0.as_mut_ptr().cast(),
             buffer.0.len() as u32,
+            FileIdExtdDirectoryInformation,
+            flags | SL_RETURN_ON_DISK_ENTRIES_ONLY,
+            name.map_or(null(), std::ptr::from_ref),
         )
-    } != 0
-    {
-        return Ok(true);
+    };
+    if status == STATUS_NO_MORE_FILES || (name.is_some() && status == STATUS_NO_SUCH_FILE) {
+        return Ok(None);
     }
-    let error = io::Error::last_os_error();
-    if error.raw_os_error() == Some(ERROR_NO_MORE_FILES as i32) {
-        return Ok(false);
+    check_status(status)?;
+    let written = status_block.Information;
+    if status != 0 || !(NAME..=N).contains(&written) {
+        return Err(FsError::InvalidDirectoryRecord);
     }
-    Err(error.into())
+    Ok(Some(written))
+}
+
+fn unicode_string(name: &[u16]) -> UNICODE_STRING {
+    // Callers validate the component and its maximum length of 255 code units.
+    let length = size_of_val(name) as u16;
+    UNICODE_STRING {
+        Length: length,
+        MaximumLength: length,
+        // UNICODE_STRING uses a mutable pointer even for input-only names.
+        Buffer: name.as_ptr().cast_mut(),
+    }
 }
 
 fn owned(handle: HANDLE) -> Result<OwnedHandle> {

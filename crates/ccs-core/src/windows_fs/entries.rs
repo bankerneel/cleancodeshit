@@ -1,15 +1,20 @@
 use std::ffi::OsString;
+use std::io;
 use std::os::windows::ffi::OsStringExt;
+use std::os::windows::io::OwnedHandle;
 
 use super::{
-    Directory, DirectoryEntry, FsError, Result, ensure_standard_user, entry_kind,
-    is_unsafe_attributes, sys, validate_name,
+    Directory, DirectoryEntry, EntryMetadata, FileIdentity, FsError, Result, ensure_standard_user,
+    entry_kind, is_unsafe_attributes, sys, validate_name,
 };
+
+const BATCH_SIZE: usize = 32 * 1024;
 
 /// A bounded iterator over entries verified against the open directory handle.
 pub struct Entries<'a> {
     directory: &'a mut Directory,
-    buffer: Box<sys::DirectoryBuffer>,
+    buffer: Box<sys::DirectoryBuffer<BATCH_SIZE>>,
+    written: usize,
     offset: Option<usize>,
     restart: bool,
     finished: bool,
@@ -19,7 +24,8 @@ impl<'a> Entries<'a> {
     pub(super) fn new(directory: &'a mut Directory) -> Self {
         Self {
             directory,
-            buffer: Box::new(sys::DirectoryBuffer([0; 32 * 1024])),
+            buffer: Box::new(sys::DirectoryBuffer([0; BATCH_SIZE])),
+            written: 0,
             offset: None,
             restart: true,
             finished: false,
@@ -31,21 +37,22 @@ impl<'a> Entries<'a> {
             let offset = match self.offset {
                 Some(offset) => offset,
                 None => {
-                    self.buffer.0.fill(0);
                     let handle = &self.directory.pinned.handle;
-                    if !sys::enumerate(handle, &mut self.buffer, self.restart)? {
+                    let Some(written) = sys::enumerate(handle, &mut self.buffer, self.restart)?
+                    else {
                         return Ok(None);
-                    }
+                    };
+                    self.written = written;
                     self.restart = false;
                     0
                 }
             };
-            let record = Record::parse(&self.buffer.0[offset..])?;
+            let record = Record::parse(&self.buffer.0[offset..self.written])?;
             self.offset = record.next.map(|next| offset + next);
-            if is_unsafe_attributes(record.attributes) {
+            let Some(expected) = record.metadata(self.directory.identity().volume) else {
                 continue;
-            }
-            let mut name: Vec<_> = record
+            };
+            let name: Vec<_> = record
                 .name
                 .chunks_exact(2)
                 .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
@@ -53,12 +60,12 @@ impl<'a> Entries<'a> {
             if validate_name(&name).is_err() {
                 continue;
             }
-            let actual = match self.directory.inspect_component(&mut name) {
+            let actual = match self.directory.inspect_component(&name) {
                 Ok(metadata) => metadata,
                 Err(FsError::UnsafeEntry) => continue,
                 Err(error) => return Err(error),
             };
-            if actual.identity.id != record.id || actual.kind != entry_kind(record.attributes) {
+            if actual != expected {
                 return Err(FsError::Changed);
             }
             return Ok(Some(DirectoryEntry {
@@ -87,6 +94,19 @@ impl Iterator for Entries<'_> {
 
 impl std::iter::FusedIterator for Entries<'_> {}
 
+/// Recall-on-open is visible in directory records, including exact-name
+/// queries. This lookup leaves the sequential enumeration cursor untouched.
+pub(super) fn lookup(parent: &OwnedHandle, name: &[u16], volume: u64) -> Result<EntryMetadata> {
+    let mut buffer = sys::DirectoryBuffer([0; 1024]);
+    let length = sys::lookup(parent, &mut buffer, name)?
+        .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+    let record = Record::parse(&buffer.0[..length])?;
+    if record.next.is_some() {
+        return Err(FsError::InvalidDirectoryRecord);
+    }
+    record.metadata(volume).ok_or(FsError::UnsafeEntry)
+}
+
 struct Record<'a> {
     next: Option<usize>,
     attributes: u32,
@@ -95,6 +115,19 @@ struct Record<'a> {
 }
 
 impl<'a> Record<'a> {
+    fn metadata(&self, volume: u64) -> Option<EntryMetadata> {
+        if is_unsafe_attributes(self.attributes) {
+            return None;
+        }
+        Some(EntryMetadata {
+            identity: FileIdentity {
+                volume,
+                id: self.id,
+            },
+            kind: entry_kind(self.attributes),
+        })
+    }
+
     fn parse(bytes: &'a [u8]) -> Result<Self> {
         let header = bytes
             .get(..sys::NAME)
@@ -118,5 +151,34 @@ impl<'a> Record<'a> {
             id: header[sys::ID..sys::ID + 16].try_into().unwrap(),
             name,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refuses_filename_truncated_at_reported_length() {
+        let mut bytes = [0u8; 1024];
+        bytes[sys::NAME_LENGTH..sys::NAME_LENGTH + 4].copy_from_slice(&4u32.to_le_bytes());
+        let short_batch = &bytes[..sys::NAME + 2];
+        assert!(matches!(
+            Record::parse(short_batch),
+            Err(FsError::InvalidDirectoryRecord)
+        ));
+    }
+
+    #[test]
+    fn refuses_offset_outside_reported_length_or_overlapping_current_record() {
+        let mut bytes = [0u8; 1024];
+        bytes[sys::NAME_LENGTH..sys::NAME_LENGTH + 4].copy_from_slice(&4u32.to_le_bytes());
+        for invalid in [8u32, 513, 1016] {
+            bytes[sys::NEXT..sys::NEXT + 4].copy_from_slice(&invalid.to_le_bytes());
+            assert!(matches!(
+                Record::parse(&bytes[..512]),
+                Err(FsError::InvalidDirectoryRecord)
+            ));
+        }
     }
 }

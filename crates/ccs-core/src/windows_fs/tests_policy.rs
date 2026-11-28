@@ -86,7 +86,23 @@ fn allows_standard_process() {
         "WindowsHome::open_current in a standard process",
     );
     let executable = std::env::current_exe().unwrap();
-    if executable.with_file_name("ccs-ci-links").is_dir() {
+    if executable.file_name() == Some(OsStr::new("ccs-core-tests.exe")) {
+        let expected = std::fs::read_to_string(executable.with_file_name("account.sid")).unwrap();
+        let whoami = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32")
+            .join("whoami.exe");
+        let output = std::process::Command::new(whoami)
+            .args(["/user", "/fo", "csv", "/nh"])
+            .output()
+            .expect("query the hosted test account SID");
+        assert!(output.status.success());
+        let identity = String::from_utf8_lossy(&output.stdout);
+        let (_, sid) = identity
+            .trim_end()
+            .rsplit_once(',')
+            .expect("whoami CSV SID");
+        assert_eq!(sid.trim_matches('"'), expected.trim(), "fixture token SID");
+
         let profile = std::fs::canonicalize(PathBuf::from(sys::profile().unwrap())).unwrap();
         let temp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
         assert!(

@@ -133,7 +133,7 @@ impl WindowsHome {
             .ok()
             .filter(u8::is_ascii_alphabetic)
             .ok_or(FsError::InvalidProfile)?;
-        let mut components = remaining.split(|&unit| unit == BACKSLASH).peekable();
+        let components = remaining.split(|&unit| unit == BACKSLASH);
         for component in components.clone() {
             validate_name(component).map_err(|_| FsError::InvalidProfile)?;
         }
@@ -148,13 +148,8 @@ impl WindowsHome {
             identity: metadata.identity,
             parent: None,
         });
-        while let Some(component) = components.next() {
-            let access = if components.peek().is_some() {
-                sys::Open::Traverse
-            } else {
-                sys::Open::Directory
-            };
-            current = PinnedDirectory::open(&current, &mut component.to_vec(), access)?;
+        for component in components {
+            current = PinnedDirectory::open(&current, component)?;
         }
         current.verify_chain()?;
         Ok(Self {
@@ -174,33 +169,67 @@ impl WindowsHome {
 struct PinnedDirectory {
     handle: OwnedHandle,
     identity: FileIdentity,
-    parent: Option<Arc<Self>>,
+    parent: Option<Parent>,
+}
+
+struct Parent {
+    directory: Arc<PinnedDirectory>,
+    child_name: Box<[u16]>,
 }
 
 impl PinnedDirectory {
-    fn open(parent: &Arc<Self>, name: &mut [u16], access: sys::Open) -> Result<Arc<Self>> {
-        let handle = sys::open_child(&parent.handle, name, access)?;
-        let metadata = read_metadata_on_volume(&handle, parent.identity.volume)?;
-        if metadata.kind != EntryKind::Directory {
+    fn open(parent: &Arc<Self>, name: &[u16]) -> Result<Arc<Self>> {
+        let expected = parent.lookup(name)?;
+        if expected.kind != EntryKind::Directory {
             return Err(FsError::Changed);
         }
+        let handle = parent.open_verified(name, sys::Open::Directory, expected)?;
         Ok(Arc::new(Self {
             handle,
-            identity: metadata.identity,
-            parent: Some(Arc::clone(parent)),
+            identity: expected.identity,
+            parent: Some(Parent {
+                directory: Arc::clone(parent),
+                child_name: name.into(),
+            }),
         }))
     }
 
+    fn lookup(&self, name: &[u16]) -> Result<EntryMetadata> {
+        entries::lookup(&self.handle, name, self.identity.volume)
+    }
+
+    fn open_verified(
+        &self,
+        name: &[u16],
+        access: sys::Open,
+        expected: EntryMetadata,
+    ) -> Result<OwnedHandle> {
+        let handle = sys::open_child(&self.handle, name, access)?;
+        if read_metadata_on_volume(&handle, self.identity.volume)? != expected {
+            return Err(FsError::Changed);
+        }
+        Ok(handle)
+    }
+
     fn verify_chain(&self) -> Result<()> {
-        let mut next = Some(self);
-        while let Some(directory) = next {
+        let mut directory = self;
+        let mut child = None;
+        loop {
             let actual = read_metadata(&directory.handle)?;
             if actual.identity != directory.identity || actual.kind != EntryKind::Directory {
                 return Err(FsError::Changed);
             }
-            next = directory.parent.as_deref();
+            if let Some((name, expected)) = child {
+                if directory.lookup(name)? != expected {
+                    return Err(FsError::Changed);
+                }
+            }
+            let Some(parent) = &directory.parent else {
+                return Ok(());
+            };
+            child = Some((parent.child_name.as_ref(), actual));
+            directory = &parent.directory;
         }
-        Ok(())
     }
 }
 
@@ -215,32 +244,40 @@ impl Directory {
     }
 
     pub fn open_dir(&self, name: &OsStr) -> Result<Self> {
-        let mut name = filename(name)?;
+        let name = filename(name)?;
         ensure_standard_user()?;
         self.pinned.verify_chain()?;
-        let pinned = PinnedDirectory::open(&self.pinned, &mut name, sys::Open::Directory)?;
+        let pinned = PinnedDirectory::open(&self.pinned, &name)?;
         Ok(Self { pinned })
     }
 
     pub fn inspect(&self, name: &OsStr) -> Result<EntryMetadata> {
-        let mut name = filename(name)?;
+        let name = filename(name)?;
         ensure_standard_user()?;
         self.pinned.verify_chain()?;
-        self.inspect_component(&mut name)
+        self.inspect_component(&name)
     }
 
     /// Mark the verified child handle for deletion. The OS decides when its
     /// filesystem disposition takes effect and refuses a nonempty directory.
     pub fn delete_verified(&self, name: &OsStr, expected: FileIdentity) -> Result<()> {
-        let mut name = filename(name)?;
+        let name = filename(name)?;
         ensure_standard_user()?;
         self.pinned.verify_chain()?;
-        let handle = sys::open_child(&self.pinned.handle, &mut name, sys::Open::Delete)?;
-        self.pinned.verify_chain()?;
-        let actual = read_metadata_on_volume(&handle, self.identity().volume)?;
-        if actual.identity != expected {
+        let preflight = self.pinned.lookup(&name)?;
+        if preflight.identity != expected {
             return Err(FsError::Changed);
         }
+        let handle = self
+            .pinned
+            .open_verified(&name, sys::Open::Delete, preflight)?;
+        self.pinned.verify_chain()?;
+        if self.pinned.lookup(&name)? != preflight {
+            return Err(FsError::Changed);
+        }
+        // Attributes can change without a new file ID. Check again on the
+        // verified handle immediately before setting its disposition.
+        checked_attributes(&handle)?;
         sys::disposition(&handle)
     }
 
@@ -252,21 +289,28 @@ impl Directory {
         Ok(Entries::new(self))
     }
 
-    fn inspect_component(&self, name: &mut [u16]) -> Result<EntryMetadata> {
-        let handle = sys::open_child(&self.pinned.handle, name, sys::Open::Inspect)?;
-        read_metadata_on_volume(&handle, self.identity().volume)
+    fn inspect_component(&self, name: &[u16]) -> Result<EntryMetadata> {
+        let expected = self.pinned.lookup(name)?;
+        self.pinned
+            .open_verified(name, sys::Open::Inspect, expected)?;
+        Ok(expected)
     }
 }
 
 fn read_metadata(handle: &OwnedHandle) -> Result<EntryMetadata> {
-    let attributes = sys::attributes(handle)?;
-    if is_unsafe_attributes(attributes) {
-        return Err(FsError::UnsafeEntry);
-    }
+    let attributes = checked_attributes(handle)?;
     Ok(EntryMetadata {
         identity: sys::identity(handle)?,
         kind: entry_kind(attributes),
     })
+}
+
+fn checked_attributes(handle: &OwnedHandle) -> Result<u32> {
+    let attributes = sys::attributes(handle)?;
+    if is_unsafe_attributes(attributes) {
+        return Err(FsError::UnsafeEntry);
+    }
+    Ok(attributes)
 }
 
 fn read_metadata_on_volume(handle: &OwnedHandle, volume: u64) -> Result<EntryMetadata> {

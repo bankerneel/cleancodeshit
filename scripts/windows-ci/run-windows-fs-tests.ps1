@@ -74,6 +74,7 @@ $standardTests = @(
 $source = (Resolve-Path -LiteralPath $TestExecutable).Path
 $stage = Join-Path $env:ProgramData ('ccs-windows-fs-' + [guid]::NewGuid().ToString('N'))
 $executable = Join-Path $stage 'ccs-core-tests.exe'
+$accountSid = Join-Path $stage 'account.sid'
 $links = Join-Path $stage 'ccs-ci-links'
 $target = Join-Path $links 'target.txt'
 $link = Join-Path $links 'link.txt'
@@ -92,6 +93,7 @@ try {
     }
     $credential = [pscredential]::new($name, $password)
     Copy-Item -LiteralPath $source -Destination $executable
+    Set-Content -LiteralPath $accountSid -Value $account.SID.Value -Encoding ascii
     New-Item -ItemType Directory -Path $links | Out-Null
     Set-Content -LiteralPath $target -Value 'symlink target'
     New-Item -ItemType SymbolicLink -Path $link -Target $target | Out-Null
@@ -121,6 +123,7 @@ finally {
             [System.IO.Directory]::Delete($links)
         }
         if ([System.IO.Directory]::Exists($stage)) {
+            [System.IO.File]::Delete($accountSid)
             [System.IO.File]::Delete($executable)
             [System.IO.Directory]::Delete($stage)
         }
