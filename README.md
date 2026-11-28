@@ -6,6 +6,8 @@
 
 # Clean Code Shit
 
+Visit [cleancodeshit.app](https://cleancodeshit.app/) for an interactive cleanup demo and install instructions.
+
 Clean Code Shit is a local command for macOS and Linux that scans developer caches, Docker disk usage, browser downloads, model caches, and AI agent logs. It shows what each item uses and what it would do, then removes only the lines you confirm. Version 1.1.0 is the first public release; 1.0.0 was private.
 
 ![Sample terminal output with fake fixture data](docs/sample-terminal.png)

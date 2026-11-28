@@ -42,6 +42,20 @@ bash tests/run-tests.sh
 
 `--list` is read only. Never run a cleaning command to verify a change unless you are pointed at a disposable fixture home.
 
+## Website
+
+`site/` is plain static HTML, CSS, JavaScript, fonts, and images. After the site checks pass, GitHub Actions uploads this directory to the `cleancodeshit` Cloudflare Pages project. Changes to `site/` on `main` deploy to production. Pull requests from this repository with site changes deploy a preview for their branch.
+
+The deployment uses the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets. Each upload adds its deployment URL to the Actions job summary.
+
+When changing the CLI version or an item registration, update the site's release references and `CLI_ITEMS` in `site/assets/app.js` in the same pull request. Run the site checks with Node.js 22 or newer and Chrome installed.
+
+```sh
+node tests/check-site.mjs
+```
+
+Set `CHROME_BIN` if Chrome is installed in a nonstandard location. The checks start and stop a loopback server that applies the site's `_headers`. To keep the local server open for manual testing, run `node tests/check-site.mjs --serve` and visit the printed URL. Stop it with Ctrl+C.
+
 ## Adding an item
 
 Each item needs four things in `cleancodeshit`: an `add` line with a unique ID, group, risk, and label. A `probe_<id>` function that sets `PROBE_BYTES`. A `clean_<id>` function that does the work. And a table row in `docs/items.md` with the exact path and a link to official documentation or official source. If you cannot find an official source for a path, say so in the pull request rather than guessing.

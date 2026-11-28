@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clean Code Shit | Clean up what AI coding agents leave behind</title>
+<meta name="description" content="AI coding agents leave caches, browsers, Docker layers and model weights all over your disk. Find the mess, preview the cleanup, flush only what you pick. Free and open source for macOS and Linux.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#111216">
+<link rel="canonical" href="https://cleancodeshit.app/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Clean Code Shit">
+<meta property="og:title" content="Clean Code Shit | Clean up what AI coding agents leave behind">
+<meta property="og:description" content="AI coding agents leave caches, browsers, Docker layers and model weights all over your disk. Find the mess, preview the cleanup, flush only what you pick. Free and open source for macOS and Linux.">
+<meta property="og:url" content="https://cleancodeshit.app/">
+<meta property="og:image" content="https://cleancodeshit.app/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Clean Code Shit. Find the mess. Flush what you choose. Clean up what AI coding agents leave behind. macOS and Linux.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Clean Code Shit | Clean up what AI coding agents leave behind">
+<meta name="twitter:description" content="AI coding agents leave caches, browsers, Docker layers and model weights all over your disk. Find the mess, preview the cleanup, flush only what you pick. Free and open source for macOS and Linux.">
+<meta name="twitter:image" content="https://cleancodeshit.app/og.png">
+<meta name="twitter:image:alt" content="Clean Code Shit. Find the mess. Flush what you choose.">
+<link rel="icon" href="assets/brand/favicon.ico" sizes="any">
+<link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png" sizes="180x180">
+<link rel="manifest" href="site.webmanifest">
+<link rel="stylesheet" href="assets/app.css">
+
+</head>
+<body data-version="1.2.1">
+
+<div class="loader" id="loader" aria-hidden="true">
+  <div class="loader__box">
+    <svg viewBox="0 0 32 32">
+      <g class="lid"><path fill="#FFC83D" d="M4 7.8 11.65 6.17 12.36 3.55 18.83 2.17 20.56 4.27 26.86 2.93 27.75 7.2 4.89 12.07Z"/></g>
+      <g class="poo"><path transform="scale(.36)" d="M15 2c2 2 1.4 3.8-.2 4.6 3.6.2 5.8 2.2 5.5 4.6 3.3.5 5.2 2.7 4.9 5.3 2.7.8 4 3 3.5 5.4-.7 3-3.8 4.6-8.2 4.6h-11c-4.4 0-7.5-1.6-8.2-4.6-.5-2.4.8-4.6 3.5-5.4-.3-2.6 1.6-4.8 4.9-5.3-.3-2.4 1.9-4.4 5.3-4.6z" fill="#7B5236" stroke="#111216" stroke-width="1.6"/></g>
+      <path fill="#F3F5F8" fill-rule="evenodd" d="M4.8 14H27.2L25.53 27.3Q25.2 30 22.54 30H9.46Q6.8 30 6.47 27.3ZM9 17H12.1L16.1 21 12.1 25H9L13 21ZM17 22.65H23V25H17Z"/>
+    </svg>
+    <p>Indexing your <b>mess</b></p>
+  </div>
+</div>
+
+<canvas id="pile" aria-hidden="true"></canvas>
+
+<header class="top">
+  <a class="brand" href="#top" aria-label="Clean Code Shit, back to top"><img src="assets/brand/logo-dark.svg" alt="Clean Code Shit" width="410" height="64"></a>
+  <div class="disk" id="disk" role="img" aria-label="Sample disk usage meter">
+    <div class="disk__row"><span><span class="nm">Sample disk</span></span><span><b id="usedGB">140.0</b><span class="of"> of 256 GB used</span><span class="of2"> / 256 GB</span></span></div>
+    <div class="disk__bar"><i class="seg sys"></i><i class="seg junk" id="junkSeg"></i></div>
+  </div>
+  <nav><a class="gh" href="https://github.com/bankerneel/cleancodeshit">GitHub</a><a class="mini" href="#install">Install</a></nav>
+</header>
+
+<div class="toast" id="toast" role="status" aria-live="polite">
+  <button type="button" id="toastX" aria-label="Dismiss">&times;</button>
+  <b>One cache. 57 GB.</b>
+  <span>That is a lot of disk for packages you already installed.</span><br>
+  <a href="#flush">Flush it</a>
+</div>
+
+<main>
+  <section class="hero wrap" id="top" data-fill=".15">
+    <p class="kicker">cleancodeshit 1.2.1 · free and MIT · macOS and Linux</p>
+    <h1><span>Your disk is</span><span class="l2">full of</span><span class="l3">shit.</span></h1>
+    <p class="lede">AI agents write code fast. They also leave <mark class="junk stale" tabindex="0" data-tag="stale · 9.8 GB" data-labels="node_modules">node_modules</mark>, <mark class="junk caution" tabindex="0" data-tag="caution · browser downloads" data-labels="chromium, headless_shell">browsers</mark>, <mark class="junk danger" tabindex="0" data-tag="danger · containers and images" data-labels="Docker volume, image layer">Docker layers</mark> and <mark class="junk caution" tabindex="0" data-tag="caution · large re-download" data-labels="gguf, safetensors">model weights</mark> all over your machine. Clean Code Shit finds the mess, shows what each pile costs, and flushes only what you pick.</p>
+    <div class="cta"><a class="btn" href="#install">Install 1.2.1</a><a class="btn ghost" href="#story">Watch it fill up</a></div>
+    <p class="hint">Scroll to build the pile.</p>
+  </section>
+
+  <div id="story">
+    <section class="step wrap" data-fill=".3">
+      <div class="inner">
+
+        <h2><span>It starts small.</span></h2>
+        <p>A <mark class="junk safe" tabindex="0" data-tag="safe · package downloads" data-labels="npx, uv cache, pip wheels, pnpm-store">package cache</mark> here, a <mark class="junk safe" tabindex="0" data-tag="safe · rebuildable" data-labels="go-build, DerivedData, debug.txt, build cache">build folder</mark> there. Nobody notices a few gigabytes until the disk does.</p>
+      </div>
+    </section>
+    <section class="step right wrap" data-fill=".5">
+      <div class="inner">
+
+        <h2><span>Then the agents show up.</span></h2>
+        <p>Five at a time. <mark class="junk safe" tabindex="0" data-tag="safe · 3.4 GB" data-labels="uvx">uvx</mark> pulls tools, a <mark class="junk caution" tabindex="0" data-tag="caution · browser downloads" data-labels="chromium, headless_shell">browser</mark> downloads for one run, and <mark class="junk caution" tabindex="0" data-tag="caution · large re-download" data-labels="gguf, safetensors, ollama blob, torch hub">model weights</mark> land just in case. <mark class="junk caution" tabindex="0" data-tag="caution · slow re-download" data-labels=".gradle, Homebrew">Toolchains</mark> join the pile.</p>
+      </div>
+    </section>
+    <section class="step wrap" data-fill=".75">
+      <div class="inner">
+
+        <h2><span>Every run leaves residue.</span></h2>
+        <p><mark class="junk stale" tabindex="0" data-tag="stale · opt-in" data-labels="node_modules, .venv, target, .next, dist, .turbo">Stale project folders</mark> outlive the projects. <mark class="junk danger" tabindex="0" data-tag="danger · 14.6 GB" data-labels="image layer">Image layers</mark> and <mark class="junk danger" tabindex="0" data-tag="danger · 1.1 GB" data-labels="rollout.jsonl">agent transcripts</mark> nobody reads pile up behind them.</p>
+      </div>
+    </section>
+    <section class="step right wrap" data-fill="1" data-slab>
+      <div class="inner">
+
+        <h2><span>One day the disk says no.</span></h2>
+        <p><mark class="junk danger" tabindex="0" data-tag="danger · needs yes" data-labels="Docker volume, container, image layer">Docker volumes</mark> are still there, never in a preset. And <mark class="junk safe" tabindex="0" data-tag="sample · 57 GB" data-labels="~/.cache/uv">~/.cache/uv</mark> is holding 57&nbsp;GB on its own.</p>
+      </div>
+    </section>
+  </div>
+
+  <section class="flush wrap" id="flush">
+    <div class="flush__controls">
+      <div class="flush__intro">
+        <p class="kicker">the fix</p>
+        <h2><span>Meet the script</span><br><span>that flushes it.</span></h2>
+        <p>Small flush clears rebuildable caches. Big flush adds the slow re-downloads. Hover or focus either button to see what goes.</p>
+      </div>
+      <div class="dual" role="group" aria-label="Flush with a preset">
+        <div class="dual__in">
+          <button type="button" class="small" data-preset="safe" aria-label="Small flush: clean safe items">safe<small>--select safe</small></button>
+          <button type="button" class="big" data-preset="all" aria-label="Big flush: clean safe and caution items">all<small>--select all</small></button>
+        </div>
+      </div>
+      <div class="legend" aria-label="Risk legend">
+        <span class="lg lg-safe">safe</span>
+        <span class="lg lg-caution">caution</span>
+        <span class="lg lg-danger">danger</span>
+        <span class="lg lg-stale">stale, opt-in</span>
+      </div>
+      <label class="stale-toggle"><input type="checkbox" id="include-stale"> include stale folders (<code>--in ~/code</code>)</label>
+      <div id="danger-items" role="group" aria-label="Danger items that need confirmation"></div>
+      <div id="danger-confirm"></div>
+      <button type="button" class="again" id="again" hidden>Refill the pile</button>
+    </div>
+    <div class="flush__result">
+      <div class="term" id="term" role="region" aria-label="Sample terminal">
+        <pre class="term__log" id="term-log" tabindex="0" aria-label="Cleanup commands and items"><span class="mute"># Sample disk. Pick a flush to run a cleanup.</span></pre>
+        <div class="term__summary" id="term-summary" aria-live="polite" hidden></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="opaque sec" id="finds">
+    <div class="wrap">
+      <p class="kicker">what goes down</p>
+      <h2>41 kinds of mess.<br>Five bins.</h2>
+      <p class="intro">Every item is probed first and shown with its size and risk. Tools you do not have are skipped. Plus one opt-in sweep for stale project folders. <a href="https://github.com/bankerneel/cleancodeshit/blob/main/docs/items.md">Full item reference</a>.</p>
+      <div class="bins" id="bins"></div>
+    </div>
+  </section>
+
+  <section class="opaque sec" id="safety">
+    <div class="wrap">
+      <p class="kicker">the safety model</p>
+      <h2>Nothing flushes<br>without asking.</h2>
+      <div class="rules">
+        <div class="rule"><span class="r safe">safe</span><p>A cache the tool rebuilds or re-downloads on demand.</p></div>
+        <div class="rule"><span class="r caution">caution</span><p>Re-downloading is slow or large, or it removes old versions.</p></div>
+        <div class="rule d"><span class="r danger">danger</span><p>Can lose data. Needs <code>yes</code> typed in full, is never in a preset, and is refused by <code>--yes</code>.</p></div>
+      </div>
+      <ul class="promises">
+        <li>Scan, choose, confirm, clean, report. Nothing is removed before you confirm.</li>
+        <li><code>--list</code> and <code>--dry-run</code> change nothing at all.</li>
+        <li>Never deletes outside your home folder, and refuses to run as root.</li>
+        <li>Agent settings, credentials and memory are never touched. Session transcripts are danger items.</li>
+        <li>Editor caches are skipped while the editor is open.</li>
+        <li>Every cleaning run writes a log, so you can see exactly what went.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="opaque sec install" id="install">
+    <div class="wrap">
+      <p class="kicker">install</p>
+      <h2>Install the cleaner.</h2>
+      <p class="intro">No sudo, no root, no package manager required. bash 3.2 or newer, so the stock macOS bash is fine.</p>
+      <div class="brew-install">
+        <h3>Homebrew</h3>
+        <pre id="brew">brew install bankerneel/tap/cleancodeshit</pre>
+        <button type="button" class="copy" data-copy="brew">Copy</button>
+      </div>
+      <h3 class="install-manual">Manual install</h3>
+      <div class="rollwrap">
+        <div class="roll" aria-hidden="true"></div>
+        <div class="sheets">
+          <div class="sheet">
+            <p class="sn">sheet 1 of 3</p>
+            <h3>Download the release</h3>
+            <pre id="s1">u=https://github.com/bankerneel/cleancodeshit/releases/download/v1.2.1
+curl -fsSL -O "$u/cleancodeshit"      -O "$u/cleancodeshit.sha256"      -O "$u/install.sh"</pre>
+            <div class="row"><span>Three files, one folder.</span><button type="button" class="copy" data-copy="s1">Copy</button></div>
+          </div>
+          <div class="sheet">
+            <p class="sn">sheet 2 of 3</p>
+            <h3>Check the checksum</h3>
+            <pre id="s2">shasum -a 256 -c cleancodeshit.sha256   <span class="c"># macOS</span>
+sha256sum -c cleancodeshit.sha256       <span class="c"># Linux</span></pre>
+            <div class="row"><span>Both print <b>cleancodeshit: OK</b>.</span><button type="button" class="copy" data-copy="s2">Copy</button></div>
+          </div>
+          <div class="sheet">
+            <p class="sn">sheet 3 of 3</p>
+            <h3>Install, then look first</h3>
+            <pre id="s3">bash install.sh
+cleancodeshit --dry-run</pre>
+            <div class="row"><span>Installs to <b>~/.local/bin</b>.</span><button type="button" class="copy" data-copy="s3">Copy</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <div>
+      <img src="assets/brand/logo-dark.svg" alt="Clean Code Shit" width="410" height="64">
+      <p>MIT licensed. Built by a developer on a 256 GB MacBook.</p>
+    </div>
+    <nav aria-label="Footer">
+      <a href="https://github.com/bankerneel/cleancodeshit">GitHub</a>
+      <a href="https://github.com/bankerneel/cleancodeshit/releases/tag/v1.2.1">Release 1.2.1</a>
+      <a href="https://github.com/bankerneel/cleancodeshit#readme">Docs</a>
+      <a href="https://github.com/bankerneel/cleancodeshit/blob/main/CHANGELOG.md">Changelog</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="assets/app.js" defer></script>
+</body>
+</html>
