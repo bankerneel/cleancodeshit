@@ -51,12 +51,16 @@ jobs:
           package=$(runuser -u builder -- env PKGDEST="$stage" bash -ec 'cd "$1"; makepkg --packagelist' bash "$stage")
           test -f "$package"
           namcap "$package"
-          pacman -U --noconfirm "$package"
+          # The container's NoExtract rules can omit documentation from an install.
+          sed '/^[[:space:]]*NoExtract[[:space:]]*=/d' /etc/pacman.conf > "$stage/pacman.conf"
+          pacman --config "$stage/pacman.conf" -U --noconfirm "$package"
           pacman -Qql cleancodeshit
-          runuser -u builder -- /usr/bin/cleancodeshit --version | grep -Fx "cleancodeshit $version"
-          runuser -u builder -- /usr/bin/cleancodeshit --help | grep -Fx 'Usage:'
-          test -r /usr/share/licenses/cleancodeshit/LICENSE
-          test -r /usr/share/doc/cleancodeshit/README.md
-          test -r /usr/share/doc/cleancodeshit/items.md
+          installed_version=$(runuser -u builder -- /usr/bin/cleancodeshit --version)
+          grep -Fx "cleancodeshit $version" <<< "$installed_version"
+          help=$(runuser -u builder -- /usr/bin/cleancodeshit --help)
+          grep -Fx 'Usage:' <<< "$help"
+          for file in /usr/share/licenses/cleancodeshit/LICENSE /usr/share/doc/cleancodeshit/{README.md,items.md}; do
+            if [ ! -s "$file" ]; then printf 'Missing installed file: %s\n' "$file" >&2; exit 1; fi
+          done
           pacman -R --noconfirm cleancodeshit
           test ! -e /usr/bin/cleancodeshit
