@@ -106,27 +106,41 @@ fi
 # Look and feel
 # ----------------------------------------------------------------------------
 
-C_RESET="" C_BOLD="" C_DIM="" C_RED="" C_GREEN="" C_YELLOW="" C_BLUE="" C_MAGENTA="" C_CYAN=""
-if [ "$USE_COLOR" = 1 ] && [ -z "${NO_COLOR:-}" ] && [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
-  C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'
-  C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
-  C_BLUE=$'\033[34m'; C_MAGENTA=$'\033[35m'; C_CYAN=$'\033[36m'
+IS_TTY=0
+if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then IS_TTY=1; fi
+
+C_RESET="" C_BOLD="" C_DIM="" C_RED="" C_YELLOW="" C_PORCELAIN=""
+C_SAFE_BADGE="" C_CAUTION_BADGE=""
+if [ "$USE_COLOR" = 1 ] && [ -z "${NO_COLOR:-}" ] && [ "$IS_TTY" = 1 ]; then
+  C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'
+  if [[ "${COLORTERM:-}" = truecolor || "${COLORTERM:-}" = 24bit ]]; then
+    C_PORCELAIN=$'\033[38;2;243;245;248m'; C_YELLOW=$'\033[38;2;255;200;61m'
+    C_DIM=$'\033[38;2;142;145;155m'; C_RED=$'\033[38;2;229;56;59m'
+    C_SAFE_BADGE=$'\033[38;2;17;18;22;48;2;243;245;248m'
+    C_CAUTION_BADGE=$'\033[38;2;17;18;22;48;2;255;200;61m'
+  elif [[ "$TERM" = *256color* ]] || { colors=$(tput colors 2>/dev/null) && [ "$colors" -ge 256 ]; }; then
+    C_PORCELAIN=$'\033[38;5;255m'; C_YELLOW=$'\033[38;5;221m'
+    C_DIM=$'\033[38;5;245m'; C_RED=$'\033[38;5;167m'
+    C_SAFE_BADGE=$'\033[38;5;233;48;5;255m'
+    C_CAUTION_BADGE=$'\033[38;5;233;48;5;221m'
+  else
+    C_PORCELAIN=$'\033[37m'; C_YELLOW=$'\033[33m'
+    C_DIM=$'\033[2;37m'; C_RED=$'\033[31m'
+    C_SAFE_BADGE=$'\033[30;47m'; C_CAUTION_BADGE=$'\033[30;43m'
+  fi
 fi
 
 if [ "$ASCII_ONLY" = 1 ] || [ "${TERM:-}" = "dumb" ]; then
   G_OK="OK"; G_FAIL="X"; G_ARROW=">"; G_DOT="*"
-  G_FULL="#"; G_EMPTY="."
+  G_FULL="#"; G_EMPTY="."; G_HAZARD="/"
   G_TL="+"; G_TR="+"; G_BL="+"; G_BR="+"; G_H="-"; G_V="|"
   FRAMES=("|" "/" "-" "\\")
 else
   G_OK="✔"; G_FAIL="✘"; G_ARROW="›"; G_DOT="●"
-  G_FULL="█"; G_EMPTY="░"
+  G_FULL="█"; G_EMPTY="░"; G_HAZARD="▨"
   G_TL="╭"; G_TR="╮"; G_BL="╰"; G_BR="╯"; G_H="─"; G_V="│"
   FRAMES=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
 fi
-
-IS_TTY=0
-if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then IS_TTY=1; fi
 
 repeat() { local s="$1" n="$2" out="" i=0; while [ "$i" -lt "$n" ]; do out="$out$s"; i=$((i + 1)); done; printf '%s' "$out"; }
 
@@ -175,22 +189,26 @@ word_width() {
   echo "$total"
 }
 
-# Prints a line of words in block letters, with a top-to-bottom colour gradient.
+# Prints a line of block letters, with brand yellow reserved for SHIT.
 print_big_line() {
-  local text="$1" row k line colors=() c
-  if [ -n "$C_RESET" ] && [ "$(tput colors 2>/dev/null || echo 8)" -ge 256 ]; then
-    colors=($'\033[38;5;51m' $'\033[38;5;45m' $'\033[38;5;39m' $'\033[38;5;33m' $'\033[38;5;63m' $'\033[38;5;99m')
-  else
-    colors=("$C_CYAN" "$C_CYAN" "$C_CYAN" "$C_BLUE" "$C_BLUE" "$C_MAGENTA")
-  fi
+  local text="$1" row k line color next_color
   row=0
   while [ "$row" -lt 6 ]; do
-    line=""; k=0
+    line=""; k=0; color=""
     while [ "$k" -lt "${#text}" ]; do
+      if [ "$k" -eq 0 ] || [ "${text:k-1:1}" = " " ]; then
+        case "${text:k}" in
+          SHIT|"SHIT "*) next_color="$C_YELLOW" ;;
+          *) next_color="$C_PORCELAIN" ;;
+        esac
+        if [ "$next_color" != "$color" ]; then
+          line="$line$next_color"
+          color="$next_color"
+        fi
+      fi
       glyph "${text:k:1}" "$row"; line="$line$GLY"; k=$((k + 1))
     done
-    c="${colors[row]}"
-    printf '  %s%s%s%s\n' "$C_BOLD" "$c" "$line" "$C_RESET"
+    printf '  %s%s%s\n' "$C_BOLD" "$line" "$C_RESET"
     row=$((row + 1))
   done
 }
@@ -222,23 +240,23 @@ banner() {
     sub="cleancodeshit $VERSION  -  $sub"
     local width=$(( ${#sub} + 6 ))
     if [ $((width + 2)) -gt "$(tput cols 2>/dev/null || echo 80)" ]; then
-      printf '\n  %s%s%s\n  %s%s%s\n\n' "$C_BOLD$C_CYAN" "cleancodeshit $VERSION" "$C_RESET" "$C_DIM" "free disk space from developer caches and Docker" "$C_RESET"
+      printf '\n  %s%s%s\n  %s%s%s\n\n' "$C_BOLD$C_PORCELAIN" "$title" "$C_RESET" "$C_DIM" "free disk space from developer caches and Docker" "$C_RESET"
       return
     fi
-    printf '\n  %s%s%s%s%s\n' "$C_CYAN" "$G_TL" "$(repeat "$G_H" $((width - 2)))" "$G_TR" "$C_RESET"
-    printf '  %s%s%s  %s%s%s  %s%s%s\n' "$C_CYAN" "$G_V" "$C_RESET" "$C_BOLD$C_CYAN" "$sub" "$C_RESET" "$C_CYAN" "$G_V" "$C_RESET"
-    printf '  %s%s%s%s%s\n\n' "$C_CYAN" "$G_BL" "$(repeat "$G_H" $((width - 2)))" "$G_BR" "$C_RESET"
+    printf '\n  %s%s%s%s%s\n' "$C_DIM" "$G_TL" "$(repeat "$G_H" $((width - 2)))" "$G_TR" "$C_RESET"
+    printf '  %s%s%s  %s%s%s  %s%s%s\n' "$C_DIM" "$G_V" "$C_RESET" "$C_BOLD$C_PORCELAIN" "$sub" "$C_RESET" "$C_DIM" "$G_V" "$C_RESET"
+    printf '  %s%s%s%s%s\n\n' "$C_DIM" "$G_BL" "$(repeat "$G_H" $((width - 2)))" "$G_BR" "$C_RESET"
     return
   fi
   local width=$(( ${#sub} + 6 ))
   local pad_t=$(( width - ${#title} - 4 ))
-  printf '\n%s%s%s%s%s\n' "$C_CYAN" "$G_TL" "$(repeat "$G_H" $((width - 2)))" "$G_TR" "$C_RESET"
-  printf '%s%s%s  %s%s%s%*s%s%s%s\n' "$C_CYAN" "$G_V" "$C_RESET" "$C_BOLD" "$title" "$C_RESET" "$pad_t" "" "$C_CYAN" "$G_V" "$C_RESET"
-  printf '%s%s%s  %s%s%s  %s%s%s\n' "$C_CYAN" "$G_V" "$C_RESET" "$C_DIM" "$sub" "$C_RESET" "$C_CYAN" "$G_V" "$C_RESET"
-  printf '%s%s%s%s%s\n\n' "$C_CYAN" "$G_BL" "$(repeat "$G_H" $((width - 2)))" "$G_BR" "$C_RESET"
+  printf '\n%s%s%s%s%s\n' "$C_DIM" "$G_TL" "$(repeat "$G_H" $((width - 2)))" "$G_TR" "$C_RESET"
+  printf '%s%s%s  %s%s%s%*s%s%s%s\n' "$C_DIM" "$G_V" "$C_RESET" "$C_BOLD$C_PORCELAIN" "$title" "$C_RESET" "$pad_t" "" "$C_DIM" "$G_V" "$C_RESET"
+  printf '%s%s%s  %s%s%s  %s%s%s\n' "$C_DIM" "$G_V" "$C_RESET" "$C_DIM" "$sub" "$C_RESET" "$C_DIM" "$G_V" "$C_RESET"
+  printf '%s%s%s%s%s\n\n' "$C_DIM" "$G_BL" "$(repeat "$G_H" $((width - 2)))" "$G_BR" "$C_RESET"
 }
 
-section() { printf '\n  %s%s %s%s\n' "$C_BOLD$C_BLUE" "$G_ARROW" "$1" "$C_RESET"; }
+section() { printf '\n  %s%s %s%s\n' "$C_BOLD$C_YELLOW" "$G_ARROW" "$1" "$C_RESET"; }
 info()    { printf '  %s\n' "$*"; }
 note()    { printf '  %s%s%s\n' "$C_DIM" "$*" "$C_RESET"; }
 warn()    { printf '  %s%s%s\n' "$C_YELLOW" "$*" "$C_RESET"; }
@@ -260,14 +278,19 @@ bar() {
   if [ "$max" -gt 0 ] && [ "$value" -gt 0 ]; then
     filled=$(awk -v v="$value" -v m="$max" -v w="$width" 'BEGIN { f = int(v * w / m + 0.5); if (f < 1) f = 1; if (f > w) f = w; print f }')
   fi
-  printf '%s%s%s%s%s' "$C_CYAN" "$(repeat "$G_FULL" "$filled")" "$C_DIM" "$(repeat "$G_EMPTY" $((width - filled)))" "$C_RESET"
+  printf '%s%s%s%s%s' "$C_YELLOW" "$(repeat "$G_FULL" "$filled")" "$C_DIM" "$(repeat "$G_EMPTY" $((width - filled)))" "$C_RESET"
 }
 
 risk_badge() {
   case "$1" in
-    safe)    printf '%s%-7s%s' "$C_GREEN" "safe" "$C_RESET" ;;
-    caution) printf '%s%-7s%s' "$C_YELLOW" "caution" "$C_RESET" ;;
-    danger)  printf '%s%-7s%s' "$C_BOLD$C_RED" "danger" "$C_RESET" ;;
+    safe)    printf '%s%-7s%s' "$C_SAFE_BADGE" "safe" "$C_RESET" ;;
+    caution) printf '%s%-7s%s' "$C_CAUTION_BADGE" "caution" "$C_RESET" ;;
+    danger)
+      if [ -n "$C_RESET" ]; then
+        printf '%s%s%s%s%s%s' "$C_BOLD$C_RED" "danger" "$C_RESET" "$C_CAUTION_BADGE" "$G_HAZARD" "$C_RESET"
+      else
+        printf '%-7s' "danger"
+      fi ;;
   esac
 }
 
@@ -1475,10 +1498,10 @@ scan() {
 SCAN_STEP=0
 progress() {
   SCAN_STEP=$((SCAN_STEP + 1))
-  [ "$IS_TTY" = 1 ] || return 0
-  printf '\r\033[K  %s%s%s Scanning %s%s%s' "$C_CYAN" "${FRAMES[$((SCAN_STEP % ${#FRAMES[@]}))]}" "$C_RESET" "$C_DIM" "$1" "$C_RESET"
+  [ -n "$C_RESET" ] || return 0
+  printf '\r\033[K  %s%s%s Scanning %s%s%s' "$C_YELLOW" "${FRAMES[$((SCAN_STEP % ${#FRAMES[@]}))]}" "$C_RESET" "$C_DIM" "$1" "$C_RESET"
 }
-progress_done() { [ "$IS_TTY" = 1 ] && printf '\r\033[K'; SCAN_STEP=0; return 0; }
+progress_done() { [ -n "$C_RESET" ] && printf '\r\033[K'; SCAN_STEP=0; return 0; }
 
 # ----------------------------------------------------------------------------
 # Usage table
@@ -1579,8 +1602,8 @@ ask_selection() {
   while :; do
     echo
     printf '  %s%s%s Choose items: numbers, ranges or names (e.g. %s1 3 5-7%s), %ss%s = all safe, %sa%s = safe + caution, %sq%s = quit\n' \
-      "$C_MAGENTA" "$G_ARROW" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_BOLD" "$C_RESET"
-    printf '  %s%s%s ' "$C_MAGENTA" "$G_ARROW" "$C_RESET"
+      "$C_YELLOW" "$G_ARROW" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_BOLD" "$C_RESET"
+    printf '  %s%s%s ' "$C_YELLOW" "$G_ARROW" "$C_RESET"
     if ! IFS= read -r answer; then echo; exit 0; fi
     case "$answer" in
       q|Q|quit|exit) note "Nothing changed."; exit 0 ;;
@@ -1601,7 +1624,7 @@ print_plan() {
   for i in "${SELECTED[@]}"; do
     [ "${BYTES[i]}" -gt 0 ] && est=$((est + BYTES[i]))
     [ "${RISK[i]}" = "danger" ] && has_danger=1
-    printf '   %s%s%s %-42s %10s  %s\n' "$C_CYAN" "$G_DOT" "$C_RESET" "${LABEL[i]}" "$(human "${BYTES[i]}")" "$(risk_badge "${RISK[i]}")"
+    printf '   %s%s%s %-42s %10s  %s\n' "$C_YELLOW" "$G_DOT" "$C_RESET" "${LABEL[i]}" "$(human "${BYTES[i]}")" "$(risk_badge "${RISK[i]}")"
     printf '       %s%s%s\n' "$C_DIM" "${ACTION[i]}" "$C_RESET"
     if [ "${IDS[i]}" = dk_custom ]; then
       local ref
@@ -1618,12 +1641,12 @@ confirm() {
   if [ "$PLAN_HAS_DANGER" = 1 ]; then
     echo
     warn "The plan includes danger items that can lose data."
-    printf '  %sType "yes" to continue:%s ' "$C_BOLD$C_RED" "$C_RESET"
+    printf '  %sType %s"yes"%s to continue:%s ' "$C_BOLD$C_YELLOW" "$C_RED" "$C_YELLOW" "$C_RESET"
     IFS= read -r answer || answer=""
     [ "$answer" = "yes" ]
     return
   fi
-  printf '\n  %sProceed?%s [y/N] ' "$C_BOLD" "$C_RESET"
+  printf '\n  %sProceed?%s [y/N] ' "$C_BOLD$C_YELLOW" "$C_RESET"
   IFS= read -r answer || answer=""
   case "$answer" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
 }
@@ -1644,14 +1667,14 @@ on_interrupt() {
     kill -KILL -- "-$CURRENT_PID" 2>/dev/null || :
     wait "$CURRENT_PID" 2>/dev/null || :
   fi
-  [ "$IS_TTY" = 1 ] && { tput cnorm 2>/dev/null; printf '\r\033[K'; }
+  [ -n "$C_RESET" ] && { tput cnorm 2>/dev/null; printf '\r\033[K'; }
   echo
   warn "Interrupted. Items already cleaned stay cleaned."
   [ -n "$LOG" ] && note "Log: $LOG"
   exit 130
 }
 trap on_interrupt INT TERM
-trap '[ "$IS_TTY" = 1 ] && tput cnorm 2>/dev/null' EXIT
+trap '[ -n "$C_RESET" ] && tput cnorm 2>/dev/null' EXIT
 
 start_log() {
   local old i limit logs=() LC_ALL=C
@@ -1701,10 +1724,10 @@ run_item() {
   CURRENT_PID=$!
   trap on_interrupt INT TERM
   [ "$INTERRUPT_PENDING" = 0 ] || on_interrupt
-  if [ "$IS_TTY" = 1 ]; then
+  if [ -n "$C_RESET" ]; then
     tput civis 2>/dev/null
     while kill -0 "$CURRENT_PID" 2>/dev/null; do
-      printf '\r\033[K   %s%s%s %s %s(%ss)%s' "$C_CYAN" "${FRAMES[frame]}" "$C_RESET" "$label" "$C_DIM" "$(( $(date +%s) - start ))" "$C_RESET"
+      printf '\r\033[K   %s%s%s %s %s(%ss)%s' "$C_YELLOW" "${FRAMES[frame]}" "$C_RESET" "$label" "$C_DIM" "$(( $(date +%s) - start ))" "$C_RESET"
       frame=$(( (frame + 1) % ${#FRAMES[@]} ))
       sleep 0.1
     done
@@ -1716,7 +1739,7 @@ run_item() {
   RC[i]=$rc; DUR[i]=$(( $(date +%s) - start ))
   echo "exit $rc after ${DUR[i]}s" >>"$LOG"
   if [ "$rc" -eq 0 ]; then
-    printf '   %s%s%s %-42s %s%ss%s\n' "$C_GREEN" "$G_OK" "$C_RESET" "$label" "$C_DIM" "${DUR[i]}" "$C_RESET"
+    printf '   %s%s%s %-42s %s%ss%s\n' "$C_PORCELAIN" "$G_OK" "$C_RESET" "$label" "$C_DIM" "${DUR[i]}" "$C_RESET"
   else
     printf '   %s%s%s %-42s %sfailed (exit %s), see the log%s\n' "$C_RED" "$G_FAIL" "$C_RESET" "$label" "$C_RED" "$rc" "$C_RESET"
   fi
@@ -1737,17 +1760,17 @@ report() {
     freed=0
     if [ "$before" -gt 0 ] && [ "$before" -gt "$after" ]; then freed=$((before - after)); fi
     total=$((total + freed))
-    if [ "${RC[i]}" -eq 0 ]; then status="$C_GREEN$G_OK$C_RESET"; else status="$C_RED$G_FAIL$C_RESET"; failed=$((failed + 1)); fi
+    if [ "${RC[i]}" -eq 0 ]; then status="$C_PORCELAIN$G_OK$C_RESET"; else status="$C_RED$G_FAIL$C_RESET"; failed=$((failed + 1)); fi
     if [ "$before" -lt 0 ]; then
       printf '   %s %-42s %10s %10s %10s\n' "$status" "${LABEL[i]}" "-" "-" "-"
     else
-      printf '   %s %-42s %10s %10s %s%10s%s\n' "$status" "${LABEL[i]}" "$(human "$before")" "$(human "$after")" "$C_BOLD$C_GREEN" "$(human "$freed")" "$C_RESET"
+      printf '   %s %-42s %10s %10s %s%10s%s\n' "$status" "${LABEL[i]}" "$(human "$before")" "$(human "$after")" "$C_BOLD$C_YELLOW" "$(human "$freed")" "$C_RESET"
     fi
   done
   echo
   info "$(printf '%sFreed:%s %s%s%s    %sDisk free:%s %s %s %s' \
-    "$C_BOLD" "$C_RESET" "$C_BOLD$C_GREEN" "$(human "$total")" "$C_RESET" \
-    "$C_BOLD" "$C_RESET" "$(human "$DISK_BEFORE")" "$G_ARROW" "$(human "$(disk_free_bytes)")")"
+    "$C_BOLD$C_YELLOW" "$C_RESET" "$C_BOLD$C_YELLOW" "$(human "$total")" "$C_RESET" \
+    "$C_BOLD" "$C_RESET" "$(human "$DISK_BEFORE")" "$C_YELLOW$G_ARROW$C_RESET" "$(human "$(disk_free_bytes)")")"
   [ "$failed" -gt 0 ] && warn "$failed item(s) failed. Details are in the log."
   note "Log: $LOG"
   echo "freed $(human "$total"); disk free after: $(human "$(disk_free_bytes)")" >>"$LOG"
