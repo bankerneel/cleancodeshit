@@ -74,7 +74,15 @@ The push to `main` deploys the site. The tag workflow publishes the GitHub relea
 
 ## Adding an item
 
-Each item needs four things in `cleancodeshit`: an `add` line with a unique ID, group, risk, and label. A `probe_<id>` function that sets `PROBE_BYTES`. A `clean_<id>` function that does the work. And a table row in `docs/items.md` with the exact path and a link to official documentation or official source. If you cannot find an official source for a path, say so in the pull request rather than guessing.
+Each Bash item needs an `add` line with a unique ID, group, risk, and label, a `probe_<id>` function that sets `PROBE_BYTES`, and a `clean_<id>` function that does the work. Document the exact path and link to official documentation or official source. If you cannot find an official source for a path, say so in the pull request rather than guessing.
+
+During the Rust migration, keep the legacy entries in `crates/ccs-core/catalog/items.toml` aligned with the Bash registrations. Record paths, actions, and sources in the catalog and regenerate the public item reference and the site's item list.
+
+```sh
+cargo run --locked -p ccs-core --example generate_catalog
+```
+
+Pass `-- --check` to verify the outputs without writing them. The Windows entries describe planned scope and availability. Runtime support is tracked separately in the [2.0 design](docs/design/2.0-rust-core.md).
 
 Risk rules:
 

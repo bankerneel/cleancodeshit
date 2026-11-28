@@ -1,0 +1,11 @@
+[package]
+name = "cleancodeshit"
+description = "Preview CLI for Clean Code Shit 2.0 (metadata only)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ccs-core = { path = "../ccs-core" }
