@@ -71,27 +71,16 @@ jobs:
           host=$(rustc +"$TOOLCHAIN" -vV | sed -n 's/^host:[[:space:]]*//p')
           echo "native host: $host"
           test "$host" = "$EXPECTED_HOST"
-      - name: Detect an elevated Windows runner
-        if: runner.os == 'Windows'
-        id: elevation
-        shell: pwsh
-        run: |
-          $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-          $admin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-          "admin=$($admin.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
       - name: Test the locked workspace
         shell: bash
-        env:
-          RUNNER_ADMIN: ${{ steps.elevation.outputs.admin }}
         run: |
           set -eu
-          args=()
-          if [ "$RUNNER_OS" = "Windows" ] && [ "${RUNNER_ADMIN:-false}" = "true" ]; then
-            # The runner token is elevated. windows_fs tests are handled by the
-            # dedicated admin/standard-user steps below, not this suite.
-            args+=(-- --skip windows_fs::)
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # The dedicated Windows step runs these fixtures with their required tokens.
+            cargo +"$TOOLCHAIN" test --workspace --all-targets --locked -- --skip windows_fs::
+          else
+            cargo +"$TOOLCHAIN" test --workspace --all-targets --locked
           fi
-          cargo +"$TOOLCHAIN" test --workspace --all-targets --locked "${args[@]}"
       - name: Build and locate the ccs-core lib test executable
         if: runner.os == 'Windows'
         id: test-exe
@@ -114,8 +103,8 @@ jobs:
               if (-not $message.profile.test) { return }
               if ([string]::IsNullOrEmpty($message.executable)) { return }
               $message.executable
-            }
-          ) | Select-Object -Unique
+            } | Select-Object -Unique
+          )
           if ($found.Count -ne 1) {
             throw "Expected exactly one ccs-core lib test executable in cargo JSON; found $($found.Count)."
           }
