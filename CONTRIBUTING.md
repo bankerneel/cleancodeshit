@@ -70,7 +70,7 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-The push to `main` deploys the site. The tag workflow publishes the GitHub release after verifying its assets, then updates the Homebrew tap if `HOMEBREW_TAP_TOKEN` is configured.
+The push to `main` deploys the site. The tag workflow publishes the GitHub release after verifying its assets, including the Arch `PKGBUILD` and `.SRCINFO`. It then updates the Homebrew tap if `HOMEBREW_TAP_TOKEN` is configured. The AUR job uses `AUR_SSH_PRIVATE_KEY` and records a skip if the key is missing or the AUR rejects the push. See [Arch packaging](packaging/aur/README.md) for the AUR account setup.
 
 ## Adding an item
 

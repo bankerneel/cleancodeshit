@@ -1,0 +1,66 @@
+name: Arch package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packaging/aur/**'
+      - 'cleancodeshit'
+      - 'LICENSE'
+      - 'README.md'
+      - 'docs/items.md'
+      - '.github/workflows/aur.yml'
+  pull_request:
+    paths:
+      - 'packaging/aur/**'
+      - 'cleancodeshit'
+      - 'LICENSE'
+      - 'README.md'
+      - 'docs/items.md'
+      - '.github/workflows/aur.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test Arch package
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel@sha256:a1d4b509c51fc68dcc7ee1f88342fe26b1f65e6775c3aff26f196141e6c76a6f
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install package build tools
+        run: pacman -Syu --noconfirm --needed git namcap
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build, lint, install, and remove the package
+        run: |
+          version=$(sed -n 's/^VERSION="\([^"]*\)"$/\1/p' cleancodeshit)
+          stage=$(mktemp -d)
+          archive="$stage/cleancodeshit-$version.tar.gz"
+          git -c safe.directory="$PWD" archive --format=tar.gz --prefix="cleancodeshit-$version/" -o "$archive" HEAD
+          bash packaging/aur/render.sh "$version" "$archive" > "$stage/PKGBUILD"
+          useradd --create-home builder
+          chown -R builder:builder "$stage"
+          namcap "$stage/PKGBUILD"
+          runuser -u builder -- env PKGDEST="$stage" bash -ec 'cd "$1"; makepkg --printsrcinfo > .SRCINFO; makepkg --noconfirm' bash "$stage"
+          package=$(runuser -u builder -- env PKGDEST="$stage" bash -ec 'cd "$1"; makepkg --packagelist' bash "$stage")
+          test -f "$package"
+          namcap "$package"
+          # The container's NoExtract rules can omit documentation from an install.
+          sed '/^[[:space:]]*NoExtract[[:space:]]*=/d' /etc/pacman.conf > "$stage/pacman.conf"
+          pacman --config "$stage/pacman.conf" -U --noconfirm "$package"
+          pacman -Qql cleancodeshit
+          installed_version=$(runuser -u builder -- /usr/bin/cleancodeshit --version)
+          grep -Fx "cleancodeshit $version" <<< "$installed_version"
+          help=$(runuser -u builder -- /usr/bin/cleancodeshit --help)
+          grep -Fx 'Usage:' <<< "$help"
+          for file in /usr/share/licenses/cleancodeshit/LICENSE /usr/share/doc/cleancodeshit/{README.md,items.md}; do
+            if [ ! -s "$file" ]; then printf 'Missing installed file: %s\n' "$file" >&2; exit 1; fi
+          done
+          pacman -R --noconfirm cleancodeshit
+          test ! -e /usr/bin/cleancodeshit

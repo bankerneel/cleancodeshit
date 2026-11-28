@@ -7,6 +7,7 @@ All notable changes to Clean Code Shit are recorded here. The format follows [Ke
 ### Added
 
 - A release command that updates the CLI, documentation, and website together. Pushing a release tag publishes verified assets and updates the Homebrew tap when configured.
+- Arch Linux packaging, with a `PKGBUILD` attached to each GitHub release and an AUR upload when the maintainer account is ready.
 
 ## [1.2.1] - 2026-11-28
 
