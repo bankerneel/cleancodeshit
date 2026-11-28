@@ -11,6 +11,7 @@ on:
       - 'docs/items.md'
       - 'site/assets/app.js'
       - '.github/workflows/rust.yml'
+      - 'scripts/windows-ci/*.ps1'
   pull_request:
     branches: [main]
     paths:
@@ -21,6 +22,7 @@ on:
       - 'docs/items.md'
       - 'site/assets/app.js'
       - '.github/workflows/rust.yml'
+      - 'scripts/windows-ci/*.ps1'
 
 permissions:
   contents: read
@@ -28,12 +30,32 @@ permissions:
 jobs:
   test:
     name: Rust 1.100.0 tests on ${{ matrix.os }}
+    # GitHub-hosted runners are disposable: no account, profile or staging
+    # state survives the job. The Windows fixture user below is created and
+    # removed entirely inside this single job.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
+        include:
+          - os: ubuntu-24.04
+            toolchain: '1.100.0'
+            host: x86_64-unknown-linux-gnu
+          - os: macos-15
+            toolchain: '1.100.0'
+            host: aarch64-apple-darwin
+          - os: windows-2025
+            toolchain: '1.100.0'
+            host: x86_64-pc-windows-msvc
+          # Native ARM64: name the host triple in the toolchain itself and
+          # assert rustc's host below. This is execution, not cross-compiling.
+          - os: windows-11-arm
+            toolchain: '1.100.0-aarch64-pc-windows-msvc'
+            host: aarch64-pc-windows-msvc
+    env:
+      TOOLCHAIN: ${{ matrix.toolchain }}
+      EXPECTED_HOST: ${{ matrix.host }}
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -43,12 +65,77 @@ jobs:
         shell: bash
         run: |
           set -eu
-          rustup toolchain install 1.100.0 --profile minimal --no-self-update
-          rustc +1.100.0 --version
-          cargo +1.100.0 --version
+          rustup toolchain install "$TOOLCHAIN" --profile minimal --no-self-update
+          rustc +"$TOOLCHAIN" --version
+          cargo +"$TOOLCHAIN" --version
+          host=$(rustc +"$TOOLCHAIN" -vV | sed -n 's/^host:[[:space:]]*//p')
+          echo "native host: $host"
+          test "$host" = "$EXPECTED_HOST"
+      - name: Detect an elevated Windows runner
+        if: runner.os == 'Windows'
+        id: elevation
+        shell: pwsh
+        run: |
+          $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+          $admin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          "admin=$($admin.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
       - name: Test the locked workspace
         shell: bash
-        run: cargo +1.100.0 test --workspace --all-targets --locked
+        env:
+          RUNNER_ADMIN: ${{ steps.elevation.outputs.admin }}
+        run: |
+          set -eu
+          args=()
+          if [ "$RUNNER_OS" = "Windows" ] && [ "${RUNNER_ADMIN:-false}" = "true" ]; then
+            # The runner token is elevated. windows_fs tests are handled by the
+            # dedicated admin/standard-user steps below, not this suite.
+            args+=(-- --skip windows_fs::)
+          fi
+          cargo +"$TOOLCHAIN" test --workspace --all-targets --locked "${args[@]}"
+      - name: Build and locate the ccs-core lib test executable
+        if: runner.os == 'Windows'
+        id: test-exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $toolchain = "+$env:TOOLCHAIN"
+          $json = Join-Path $env:RUNNER_TEMP 'ccs-core-lib-test.json'
+          & cargo $toolchain test -p ccs-core --lib --no-run --locked --message-format=json-render-diagnostics 1> $json
+          if ($LASTEXITCODE -ne 0) {
+            throw "cargo test --no-run failed with exit code $LASTEXITCODE"
+          }
+          $found = @(
+            Get-Content -LiteralPath $json | ForEach-Object {
+              if ([string]::IsNullOrWhiteSpace($_)) { return }
+              try { $message = $_ | ConvertFrom-Json } catch { return }
+              if ($message.reason -ne 'compiler-artifact') { return }
+              if ($message.target.name -ne 'ccs_core') { return }
+              if ($message.target.kind -notcontains 'lib') { return }
+              if (-not $message.profile.test) { return }
+              if ([string]::IsNullOrEmpty($message.executable)) { return }
+              $message.executable
+            }
+          ) | Select-Object -Unique
+          if ($found.Count -ne 1) {
+            throw "Expected exactly one ccs-core lib test executable in cargo JSON; found $($found.Count)."
+          }
+          if (-not (Test-Path -LiteralPath $found[0] -PathType Leaf)) {
+            throw "Cargo-reported test executable does not exist: $($found[0])"
+          }
+          "path=$($found[0])" >> $env:GITHUB_OUTPUT
+      - name: Assert elevated refusal and run standard-user filesystem tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TEST_EXE: ${{ steps.test-exe.outputs.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          try {
+            & ./scripts/windows-ci/run-windows-fs-tests.ps1 -TestExecutable $env:TEST_EXE
+          } catch {
+            Write-Error $_
+            exit 1
+          }
       - name: Check formatting
         if: matrix.os == 'ubuntu-24.04'
         shell: bash
