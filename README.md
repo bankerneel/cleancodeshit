@@ -66,6 +66,18 @@ Requirements: macOS or Linux, bash 3.2 or newer (the stock macOS bash is fine), 
 
 To uninstall a manual installation, remove `~/.local/bin/cleancodeshit` and delete the run logs if you no longer need them. [Homebrew tap publishing and uninstall](packaging/homebrew/README.md).
 
+### Arch Linux (AUR)
+
+On Arch with `base-devel` installed, download and review the latest release's `PKGBUILD` in an empty directory, then run `makepkg -si` as your normal user. If the release predates the `PKGBUILD` asset, use the manual install above.
+
+```sh
+curl -fsSL -o PKGBUILD \
+  https://github.com/bankerneel/cleancodeshit/releases/latest/download/PKGBUILD
+makepkg -si
+```
+
+The AUR package is coming. `yay -S cleancodeshit` and `paru -S cleancodeshit` will be available once it is published.
+
 ## Usage
 
 ```sh

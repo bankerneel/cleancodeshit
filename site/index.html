@@ -166,8 +166,8 @@
     <div class="wrap">
       <p class="kicker">install</p>
       <h2>Install the cleaner.</h2>
-      <p class="intro">No sudo, no root, no package manager required. bash 3.2 or newer, so the stock macOS bash is fine.</p>
-      <div class="brew-install">
+      <p class="intro">Run the cleaner as your normal user. The manual install needs Bash 3.2 or newer and no package manager.</p>
+      <div class="package-install">
         <h3>Homebrew</h3>
         <pre id="brew">brew install bankerneel/tap/cleancodeshit</pre>
         <button type="button" class="copy" data-copy="brew">Copy</button>
@@ -198,6 +198,15 @@ cleancodeshit --dry-run</pre>
             <div class="row"><span>Installs to <b>~/.local/bin</b>.</span><button type="button" class="copy" data-copy="s3">Copy</button></div>
           </div>
         </div>
+      </div>
+      <div class="package-install">
+        <h3>Arch Linux (AUR)</h3>
+        <p>With <code>base-devel</code> installed, download and review the latest release's <code>PKGBUILD</code> in an empty directory. If the release predates the asset, use the manual install above.</p>
+        <pre id="arch-install">curl -fsSL -o PKGBUILD \
+  https://github.com/bankerneel/cleancodeshit/releases/latest/download/PKGBUILD
+makepkg -si</pre>
+        <button type="button" class="copy" data-copy="arch-install">Copy</button>
+        <p>The AUR package is coming. <code>yay -S cleancodeshit</code> and <code>paru -S cleancodeshit</code> will be available once it is published.</p>
       </div>
     </div>
   </section>

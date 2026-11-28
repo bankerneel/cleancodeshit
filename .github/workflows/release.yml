@@ -11,8 +11,40 @@ concurrency:
   group: release-${{ github.ref }}
 
 jobs:
+  aur-package:
+    name: Render Arch release files
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel@sha256:a1d4b509c51fc68dcc7ee1f88342fe26b1f65e6775c3aff26f196141e6c76a6f
+    timeout-minutes: 10
+    steps:
+      - run: pacman -Syu --noconfirm --needed git
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Render PKGBUILD and .SRCINFO from the tag archive
+        shell: bash
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          grep -Fxq "VERSION=\"$version\"" cleancodeshit
+          stage=$(mktemp -d)
+          archive="$stage/cleancodeshit-$version.tar.gz"
+          curl -fsSL --retry 3 "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz" -o "$archive"
+          bash packaging/aur/render.sh "$version" "$archive" > "$stage/PKGBUILD"
+          useradd --create-home builder
+          chown -R builder:builder "$stage"
+          runuser -u builder -- bash -ec 'cd "$1"; makepkg --printsrcinfo' bash "$stage" > "$stage/.SRCINFO"
+          mkdir aur-package
+          cp "$stage/PKGBUILD" "$stage/.SRCINFO" aur-package/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aur-package
+          path: aur-package/
+          include-hidden-files: true
+          if-no-files-found: error
+
   publish:
     name: Publish release and verify assets
+    needs: aur-package
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -24,6 +56,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: aur-package
+          path: aur-package
       - name: Verify release metadata
         run: node scripts/release-metadata.mjs verify "$GITHUB_REF_NAME" "$RUNNER_TEMP/release-notes.md"
       - name: Upload and verify the release
@@ -36,13 +72,23 @@ jobs:
             gh release create "$tag" --verify-tag --draft --title "Clean Code Shit $version" --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
           draft=$(gh release view "$tag" --json isDraft --jq .isDraft)
+          # GitHub removes leading periods from asset filenames. Keep .SRCINFO as the label.
+          cp aur-package/.SRCINFO aur-package/SRCINFO
           if [[ "$draft" == true ]]; then
-            gh release upload "$tag" --clobber cleancodeshit cleancodeshit.sha256 install.sh
+            gh release upload "$tag" --clobber cleancodeshit cleancodeshit.sha256 install.sh \
+              aur-package/PKGBUILD 'aur-package/SRCINFO#.SRCINFO'
+          else
+            names=$(gh release view "$tag" --json assets --jq '.assets[].name')
+            if ! grep -Fxq PKGBUILD <<< "$names"; then gh release upload "$tag" aur-package/PKGBUILD; fi
+            if ! grep -Fxq SRCINFO <<< "$names"; then gh release upload "$tag" 'aur-package/SRCINFO#.SRCINFO'; fi
           fi
           assets=$(mktemp -d)
-          gh release download "$tag" --dir "$assets" -p cleancodeshit -p cleancodeshit.sha256 -p install.sh
+          gh release download "$tag" --dir "$assets" -p cleancodeshit -p cleancodeshit.sha256 -p install.sh \
+            -p PKGBUILD -p SRCINFO
           cmp cleancodeshit.sha256 "$assets/cleancodeshit.sha256"
           cmp install.sh "$assets/install.sh"
+          cmp aur-package/PKGBUILD "$assets/PKGBUILD"
+          cmp aur-package/.SRCINFO "$assets/SRCINFO"
           (cd "$assets" && sha256sum -c cleancodeshit.sha256)
           if [[ "$draft" == true ]]; then
             gh release edit "$tag" --draft=false
@@ -103,3 +149,41 @@ jobs:
           git add -- Formula/cleancodeshit.rb
           git commit -m "Update cleancodeshit to $GITHUB_REF_NAME"
           git push
+
+  aur:
+    name: Update AUR package
+    needs: publish
+    if: github.repository == 'bankerneel/cleancodeshit'
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel@sha256:a1d4b509c51fc68dcc7ee1f88342fe26b1f65e6775c3aff26f196141e6c76a6f
+    timeout-minutes: 10
+    concurrency:
+      group: aur-cleancodeshit
+    steps:
+      - name: Check AUR credentials
+        id: credentials
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -n "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'AUR upload skipped because AUR_SSH_PRIVATE_KEY is unavailable. The GitHub release assets are available.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - if: steps.credentials.outputs.available == 'true'
+        run: pacman -Syu --noconfirm --needed git openssh
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        if: steps.credentials.outputs.available == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: steps.credentials.outputs.available == 'true'
+        with:
+          name: aur-package
+          path: aur-package
+      - name: Publish to the AUR
+        if: steps.credentials.outputs.available == 'true'
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        shell: bash
+        run: bash packaging/aur/publish.sh "${GITHUB_REF_NAME#v}" "$PWD/aur-package"

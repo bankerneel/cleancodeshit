@@ -1,0 +1,61 @@
+name: Arch package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packaging/aur/**'
+      - 'cleancodeshit'
+      - 'LICENSE'
+      - 'README.md'
+      - 'docs/items.md'
+      - '.github/workflows/aur.yml'
+  pull_request:
+    paths:
+      - 'packaging/aur/**'
+      - 'cleancodeshit'
+      - 'LICENSE'
+      - 'README.md'
+      - 'docs/items.md'
+      - '.github/workflows/aur.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test Arch package
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel@sha256:a1d4b509c51fc68dcc7ee1f88342fe26b1f65e6775c3aff26f196141e6c76a6f
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install package build tools
+        run: pacman -Syu --noconfirm --needed git namcap
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build, lint, install, and remove the package
+        run: |
+          version=$(sed -n 's/^VERSION="\([^"]*\)"$/\1/p' cleancodeshit)
+          stage=$(mktemp -d)
+          archive="$stage/cleancodeshit-$version.tar.gz"
+          git archive --format=tar.gz --prefix="cleancodeshit-$version/" -o "$archive" HEAD
+          bash packaging/aur/render.sh "$version" "$archive" > "$stage/PKGBUILD"
+          useradd --create-home builder
+          chown -R builder:builder "$stage"
+          namcap "$stage/PKGBUILD"
+          runuser -u builder -- env PKGDEST="$stage" bash -ec 'cd "$1"; makepkg --printsrcinfo > .SRCINFO; makepkg --noconfirm' bash "$stage"
+          package=$(runuser -u builder -- env PKGDEST="$stage" bash -ec 'cd "$1"; makepkg --packagelist' bash "$stage")
+          namcap "$package"
+          pacman -U --noconfirm "$package"
+          test "$(runuser -u builder -- cleancodeshit --version)" = "cleancodeshit $version"
+          help=$(runuser -u builder -- cleancodeshit --help)
+          [[ "$help" == *Usage:* ]]
+          test -r /usr/share/licenses/cleancodeshit/LICENSE
+          test -r /usr/share/doc/cleancodeshit/README.md
+          test -r /usr/share/doc/cleancodeshit/items.md
+          pacman -R --noconfirm cleancodeshit
+          ! command -v cleancodeshit

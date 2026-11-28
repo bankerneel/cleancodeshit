@@ -337,15 +337,16 @@ body.quake main{animation:quake .5s cubic-bezier(.36,.07,.19,.97)}
 
 #safety{background:var(--ink)}
 .sec .intro a{text-underline-offset:.2em}
-.brew-install{width:min(740px,100%);margin:44px auto 0;padding:22px;background:var(--ink2);
+.package-install{width:min(740px,100%);margin:44px auto 0;padding:22px;background:var(--ink2);
   border:1px solid var(--line2);border-radius:12px}
-.brew-install h3,.install-manual{font:400 24px/1.1 var(--display);text-transform:uppercase}
-.brew-install pre{margin:12px 0;background:var(--ink);padding:14px 16px;border-radius:8px;overflow:auto;
+.package-install h3,.install-manual{font:400 24px/1.1 var(--display);text-transform:uppercase}
+.package-install pre{margin:12px 0;background:var(--ink);padding:14px 16px;border-radius:8px;overflow:auto;
   font:400 13px/1.7 var(--mono)}
-.brew-install .copy{background:var(--paper);color:var(--ink)}
+.package-install .copy{background:var(--paper);color:var(--ink)}
+.package-install p{margin-top:12px;font-size:14px;color:var(--soft)}
 .install-manual{width:min(740px,100%);margin:40px auto 0}
 .install-manual + .rollwrap{margin-top:26px}
-@media (max-width:640px){.brew-install{padding:16px}.brew-install pre{font-size:11.5px}}
+@media (max-width:640px){.package-install{padding:16px}.package-install pre{font-size:11.5px}}
 
 .not-found{min-height:100svh;display:grid;align-content:center;gap:20px;padding-block:54px}
 .not-found img{width:min(300px,100%);height:auto}
