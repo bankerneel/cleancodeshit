@@ -49,6 +49,7 @@ jobs:
           namcap "$stage/PKGBUILD"
           runuser -u builder -- env PKGDEST="$stage" bash -ec 'cd "$1"; makepkg --printsrcinfo > .SRCINFO; makepkg --noconfirm' bash "$stage"
           package=$(runuser -u builder -- env PKGDEST="$stage" bash -ec 'cd "$1"; makepkg --packagelist' bash "$stage")
+          test -f "$package"
           namcap "$package"
           pacman -U --noconfirm "$package"
           test "$(runuser -u builder -- cleancodeshit --version)" = "cleancodeshit $version"

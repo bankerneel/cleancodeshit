@@ -4,6 +4,7 @@ pkgver=@PKGVER@
 pkgrel=1
 pkgdesc='Interactive cleanup for AI coding agent and developer caches'
 arch=('any')
+options=('!debug' '!strip')
 url='https://cleancodeshit.app'
 license=('MIT')
 depends=('bash' 'coreutils' 'findutils' 'gawk' 'grep' 'sed' 'procps-ng' 'ncurses')
