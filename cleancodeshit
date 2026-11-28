@@ -1641,7 +1641,7 @@ confirm() {
   if [ "$PLAN_HAS_DANGER" = 1 ]; then
     echo
     warn "The plan includes danger items that can lose data."
-    printf '  %sType "yes" to continue:%s ' "$C_BOLD$C_RED" "$C_RESET"
+    printf '  %sType %s"yes"%s to continue:%s ' "$C_BOLD$C_YELLOW" "$C_RED" "$C_YELLOW" "$C_RESET"
     IFS= read -r answer || answer=""
     [ "$answer" = "yes" ]
     return
