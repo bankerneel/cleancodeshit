@@ -63,11 +63,12 @@ load test_helper
 
 interrupt_cleanup() (
   assert_fake_home || return 1
+  item="${1:-npm}"
   export CCS_INTERRUPT_PIDS="$CASE_ROOT/interrupt-pids"
   parent= worker= sleeper=
   trap 'for pid in "$parent" "$worker" "$sleeper"; do [ -z "$pid" ] || kill -KILL "$pid" 2>/dev/null || :; done' EXIT
   set -m
-  "${BASH_UNDER_TEST:-bash}" "$PRODUCT" --select npm --yes >"$CASE_ROOT/interrupt-console" 2>&1 &
+  "${BASH_UNDER_TEST:-bash}" "$PRODUCT" --select "$item" --yes >"$CASE_ROOT/interrupt-console" 2>&1 &
   parent=$!
   for ((i=0; i<120; i++)); do
     [ ! -s "$CCS_INTERRUPT_PIDS" ] || break
@@ -95,4 +96,14 @@ interrupt_cleanup() (
   fixture "$HOME/.npm/_cacache/fixture"
   run interrupt_cleanup
   [ "$status" -eq 0 ]
+}
+
+@test "Ctrl+C during the uv lock wait stops uv and its child without a retry" {
+  fixture "$XDG_CACHE_HOME/uv/fixture"
+  export CCS_UV_LOCK="$CASE_ROOT/uv.lock" CLEANCODESHIT_UV_LOCK_TIMEOUT=30
+  fixture "$CCS_UV_LOCK"
+  run interrupt_cleanup uv
+  [ "$status" -eq 0 ]
+  grep -Fx "$(printf 'uv\t--cache-dir\t%s\tcache\tprune' "$XDG_CACHE_HOME/uv")" "$CCS_CLEANUP_LOG"
+  ! grep -F -- '--force' "$CCS_CLEANUP_LOG"
 }
