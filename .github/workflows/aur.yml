@@ -42,7 +42,7 @@ jobs:
           version=$(sed -n 's/^VERSION="\([^"]*\)"$/\1/p' cleancodeshit)
           stage=$(mktemp -d)
           archive="$stage/cleancodeshit-$version.tar.gz"
-          git archive --format=tar.gz --prefix="cleancodeshit-$version/" -o "$archive" HEAD
+          git -c safe.directory="$PWD" archive --format=tar.gz --prefix="cleancodeshit-$version/" -o "$archive" HEAD
           bash packaging/aur/render.sh "$version" "$archive" > "$stage/PKGBUILD"
           useradd --create-home builder
           chown -R builder:builder "$stage"
