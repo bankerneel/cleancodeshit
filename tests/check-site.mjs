@@ -1,11 +1,11 @@
 ﻿import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
 import { extname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkSiteVersions, cliVersion, siteSources } from '../scripts/site-version.mjs';
+import { openChrome } from '../tools/chrome.mjs';
 
 const site = fileURLToPath(new URL('../site/', import.meta.url));
 const canonical = 'https://cleancodeshit.app/';
@@ -29,12 +29,7 @@ async function checkSources() {
     contents('index.html'), contents('404.html'), contents('assets/app.css'), contents('assets/app.js'),
     contents('site.webmanifest').then(JSON.parse), readFile(new URL('../cleancodeshit', import.meta.url), 'utf8'),
   ]);
-  const version = cli.match(/^VERSION="([^"]+)"/m)?.[1];
-  assert(version && html.includes('data-version="' + version + '"'), 'The site version must match the CLI VERSION');
-  const withoutIcons = html.replace(/<svg\b[\s\S]*?<\/svg>/gi, '');
-  const versions = [...withoutIcons.matchAll(/\bv?(\d+\.\d+\.\d+)\b/g)].map(([, value]) => value);
-  assert(versions.length >= 5 && versions.every((v) => v === version), 'The page contains a stale release version');
-  assert(html.includes('/releases/download/v' + version) && html.includes('/releases/tag/v' + version));
+  checkSiteVersions(siteSources(site), cliVersion(cli));
   assert(html.includes('<link rel="canonical" href="' + canonical + '">'));
   for (const attr of ['property="og:image"', 'name="twitter:image"']) {
     assert(html.includes(attr + ' content="' + canonical + 'og.png"'));
@@ -188,51 +183,11 @@ async function checkHeaders(origin) {
   await root.body.cancel();
 }
 
-function chromePath() {
-  if (process.env.CHROME_BIN) return process.env.CHROME_BIN;
-  if (process.platform === 'win32') return 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-  if (process.platform === 'darwin') return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  return 'google-chrome';
-}
-
 async function smoke(origin, items) {
-  const profile = await mkdtemp(join(tmpdir(), 'ccs-site-smoke-'));
-  const chrome = spawn(chromePath(), [
-    '--headless=new', '--remote-debugging-port=0', '--user-data-dir=' + profile, '--no-first-run',
-    '--disable-background-networking', 'about:blank',
-  ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
-  const exited = new Promise((resolve) => chrome.once('close', resolve));
-  let ws;
-  let send;
-  try {
-    const endpoint = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Chrome did not advertise a debugging endpoint')), 10000);
-      chrome.once('error', (error) => { clearTimeout(timer); reject(error); });
-      chrome.once('exit', (code) => { clearTimeout(timer); reject(new Error('Chrome exited ' + code)); });
-      chrome.stderr.on('data', (chunk) => {
-        const url = /DevTools listening on ws:\/\/([^/]+)/.exec(String(chunk));
-        if (url) { clearTimeout(timer); resolve('http://' + url[1] + '/json/list'); }
-      });
-    });
-    const targets = await (await fetch(endpoint)).json();
-    ws = new WebSocket(targets.find((target) => target.type === 'page').webSocketDebuggerUrl);
-    await new Promise((resolve, reject) => {
-      ws.addEventListener('open', resolve, { once: true });
-      ws.addEventListener('error', reject, { once: true });
-    });
-    let id = 0;
-    let pageLoaded;
-    const pending = new Map();
-    const problems = [];
-    ws.addEventListener('message', ({ data }) => {
-      const message = JSON.parse(data);
-      if (message.id && pending.has(message.id)) {
-        const { resolve, reject, timer } = pending.get(message.id);
-        pending.delete(message.id);
-        clearTimeout(timer);
-        if (message.error) reject(new Error(message.error.message));
-        else resolve(message.result);
-      }
+  const problems = [];
+  let pageLoaded;
+  const { send, close } = await openChrome({
+    onEvent(message) {
       if (message.method === 'Page.loadEventFired') pageLoaded?.();
       if (message.method === 'Runtime.exceptionThrown') {
         problems.push(message.params.exceptionDetails.exception?.description ?? message.params.exceptionDetails.text);
@@ -245,23 +200,9 @@ async function smoke(origin, items) {
         const url = message.params.request.url;
         if (/^https?:/.test(url) && new URL(url).origin !== origin) problems.push('External request: ' + url);
       }
-    });
-    ws.addEventListener('close', () => {
-      for (const { reject, timer } of pending.values()) {
-        clearTimeout(timer);
-        reject(new Error('Chrome closed the debugging connection'));
-      }
-      pending.clear();
-    });
-    send = (method, params = {}) => new Promise((resolve, reject) => {
-      const next = ++id;
-      const timer = setTimeout(() => {
-        pending.delete(next);
-        reject(new Error(method + ' timed out'));
-      }, 7000);
-      pending.set(next, { resolve, reject, timer });
-      ws.send(JSON.stringify({ id: next, method, params }));
-    });
+    },
+  });
+  try {
     for (const domain of ['Page', 'Runtime', 'Log', 'Network']) await send(domain + '.enable');
     await send('Page.addScriptToEvaluateOnNewDocument', {
       source: 'window.siteViolations = []; addEventListener("securitypolicyviolation", event => siteViolations.push(event.violatedDirective));',
@@ -289,13 +230,7 @@ async function smoke(origin, items) {
       assert.deepEqual(problems, [], file);
     }
   } finally {
-    if (ws?.readyState === WebSocket.OPEN && send) {
-      await Promise.race([send('Browser.close').catch(() => {}), exited]);
-    }
-    ws?.close();
-    if (chrome.exitCode === null && chrome.pid) chrome.kill();
-    await exited;
-    await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await close();
   }
 }
 
@@ -308,6 +243,10 @@ if (process.argv[2] === '--serve') {
       server.closeAllConnections();
     });
   }
+} else if (process.argv[2] === '--version-only') {
+  const cli = await readFile(new URL('../cleancodeshit', import.meta.url), 'utf8');
+  checkSiteVersions(siteSources(site), cliVersion(cli));
+  console.log('All site versions match the CLI.');
 } else {
   const items = await checkSources();
   const { server, origin } = await serve();

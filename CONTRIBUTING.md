@@ -48,13 +48,29 @@ bash tests/run-tests.sh
 
 The deployment uses the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets. Each upload adds its deployment URL to the Actions job summary.
 
-When changing the CLI version or an item registration, update the site's release references and `CLI_ITEMS` in `site/assets/app.js` in the same pull request. Run the site checks with Node.js 22 or newer and Chrome installed.
+When changing an item registration, update `CLI_ITEMS` in `site/assets/app.js` in the same pull request. The release command updates the site's release references. Run the site checks with Node.js 22 or newer and Chrome installed.
 
 ```sh
 node tests/check-site.mjs
 ```
 
 Set `CHROME_BIN` if Chrome is installed in a nonstandard location. The checks start and stop a loopback server that applies the site's `_headers`. To keep the local server open for manual testing, run `node tests/check-site.mjs --serve` and visit the printed URL. Stop it with Ctrl+C.
+
+## Releasing
+
+Add release notes under `## [Unreleased]` in `CHANGELOG.md` and commit them. From a clean `main`, run `scripts/release.sh X.Y.Z` with Node.js 22 or newer. It updates the CLI checksum, documentation, packaging, and site. It uses installed Chrome and the system `script` command to refresh the README screenshot, and warns if Chrome is missing.
+
+Review the diff, then run the commands printed by the script.
+
+```sh
+git add -u
+git commit -m "Release X.Y.Z"
+git push origin main
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+The push to `main` deploys the site. The tag workflow publishes the GitHub release after verifying its assets, then updates the Homebrew tap if `HOMEBREW_TAP_TOKEN` is configured.
 
 ## Adding an item
 

@@ -1,6 +1,12 @@
 # Changelog
 
-All notable changes to Clean Code Shit are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project does not use semantic versioning for its release names.
+All notable changes to Clean Code Shit are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+### Added
+
+- A release command that updates the CLI, documentation, and website together. Pushing a release tag publishes verified assets and updates the Homebrew tap when configured.
 
 ## [1.2.1] - 2026-11-28
 
