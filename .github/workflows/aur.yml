@@ -52,11 +52,11 @@ jobs:
           test -f "$package"
           namcap "$package"
           pacman -U --noconfirm "$package"
-          test "$(runuser -u builder -- cleancodeshit --version)" = "cleancodeshit $version"
-          help=$(runuser -u builder -- cleancodeshit --help)
-          [[ "$help" == *Usage:* ]]
+          pacman -Qql cleancodeshit
+          runuser -u builder -- /usr/bin/cleancodeshit --version | grep -Fx "cleancodeshit $version"
+          runuser -u builder -- /usr/bin/cleancodeshit --help | grep -Fx 'Usage:'
           test -r /usr/share/licenses/cleancodeshit/LICENSE
           test -r /usr/share/doc/cleancodeshit/README.md
           test -r /usr/share/doc/cleancodeshit/items.md
           pacman -R --noconfirm cleancodeshit
-          ! command -v cleancodeshit
+          test ! -e /usr/bin/cleancodeshit
