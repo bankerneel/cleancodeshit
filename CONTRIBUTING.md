@@ -58,14 +58,14 @@ Set `CHROME_BIN` if Chrome is installed in a nonstandard location. The checks st
 
 ## Releasing
 
-Add release notes under `## [Unreleased]` in `CHANGELOG.md` and commit them. From a clean `main`, run `scripts/release.sh X.Y.Z` with Node.js 22 or newer. It updates the CLI checksum, documentation, packaging, and site. It uses installed Chrome and the system `script` command to refresh the README screenshot, and warns if Chrome is missing.
+Add release notes under `## [Unreleased]` in `CHANGELOG.md` and commit them. Run `scripts/release.sh X.Y.Z` with Node.js 22 or newer from a clean `main` checkout or a clean detached worktree at `origin/main`. It updates the CLI checksum, documentation, packaging, and site. It uses installed Chrome and the system `script` command to refresh the README screenshot, and warns if Chrome is missing.
 
 Review the diff, then run the commands printed by the script.
 
 ```sh
 git add -u
 git commit -m "Release X.Y.Z"
-git push origin main
+git push origin HEAD:main
 git tag vX.Y.Z
 git push origin vX.Y.Z
 ```

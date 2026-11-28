@@ -31,8 +31,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=$GITHUB_REF_NAME
+          version=${tag#v}
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --verify-tag --draft --title "$tag" --notes-file "$RUNNER_TEMP/release-notes.md"
+            gh release create "$tag" --verify-tag --draft --title "Clean Code Shit $version" --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
           draft=$(gh release view "$tag" --json isDraft --jq .isDraft)
           if [[ "$draft" == true ]]; then

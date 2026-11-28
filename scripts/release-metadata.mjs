@@ -87,7 +87,7 @@ async function bump(current, cli, changelog, sources) {
   for (const [file, content] of changed) writeFileSync(file, content);
 
   console.log(`Prepared ${current} -> ${version}:\n${[...changed.keys()].map((path) => `  ${path}`).join('\n')}`);
-  console.log(`\nReview the diff, then run:\n  git add -u\n  git commit -m "Release ${version}"\n  git push origin main\n  git tag v${version}\n  git push origin v${version}`);
+  console.log(`\nReview the diff, then run:\n  git add -u\n  git commit -m "Release ${version}"\n  git push origin HEAD:main\n  git tag v${version}\n  git push origin v${version}`);
 }
 
 try {

@@ -44,11 +44,44 @@ release() {
   [ "$status" -ne 0 ]
   has 'working tree must be clean'
   rm untracked
+  git update-ref refs/remotes/origin/main HEAD
   git switch -qc other
   run release "$next"
   [ "$status" -ne 0 ]
   has 'Run this from main'
   [ -z "$(git status --porcelain)" ]
+}
+
+@test "release accepts only a clean detached worktree at origin/main" {
+  notes=$'## [Unreleased]\n\n- Sample change.\n\n'
+  release_repo
+  git worktree add -q --detach "$CASE_ROOT/release-worktree" HEAD
+  cd "$CASE_ROOT/release-worktree"
+  export CHROME_BIN="$CASE_ROOT/not-installed"
+
+  run release "$next"
+  [ "$status" -ne 0 ]
+  has 'Run this from main or with a detached HEAD at origin/main'
+
+  git -C "$repo" commit --allow-empty -qm 'Advance main'
+  git update-ref refs/remotes/origin/main refs/heads/main
+  run release "$next"
+  [ "$status" -ne 0 ]
+  has 'Run this from main or with a detached HEAD at origin/main'
+  [ -z "$(git status --porcelain)" ]
+
+  git switch --quiet --detach refs/remotes/origin/main
+  printf '\nUncommitted change.\n' >> README.md
+  run release "$next"
+  [ "$status" -ne 0 ]
+  has 'working tree must be clean'
+  git restore -- README.md
+
+  run release "$next"
+  [ "$status" -eq 0 ]
+  has 'git push origin HEAD:main'
+  grep -Fx "VERSION=\"$next\"" cleancodeshit
+  [ -z "$(git -C "$repo" status --porcelain)" ]
 }
 
 @test "release rejects malformed, equal and older versions" {
